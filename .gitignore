@@ -1,0 +1,39 @@
+# Python bytecode and caches
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+venv310/
+venv312/
+
+# Notebook checkpoints
+.ipynb_checkpoints/
+
+# OS / editor junk
+.DS_Store
+Thumbs.db
+.vscode/
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+
+# Local generated demo outputs
+animation.gif
+test_video.mp4
+
+# Local installers / archives / backups
+*.zip
+*.exe
+
+# Large local datasets and model artifacts (do not push by default)
+data/
+models/
+
+# Legacy demo app (exclude if production-only repo)
+legacy/

@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>VERA — Visual Expression &amp; Response Analyzer</title>
+<style>
+/* ── Reset & base ───────────────────────────────────────────── */
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0b0f1a;--bg2:#111827;--bg3:#1a2235;
+  --accent:#00d4ff;--accent2:#7c3aed;
+  --green:#22c55e;--yellow:#f59e0b;--orange:#f97316;--red:#ef4444;
+  --text:#e2e8f0;--sub:#94a3b8;
+  --border:#1e293b;--radius:10px;
+}
+html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;font-size:14px}
+
+/* ── Header ─────────────────────────────────────────────────── */
+header{height:52px;display:flex;align-items:center;justify-content:space-between;
+  background:var(--bg2);border-bottom:1px solid var(--border);padding:0 20px}
+.logo{font-size:1.3rem;font-weight:700;letter-spacing:.04em;color:var(--accent)}
+.logo span{color:var(--text)}
+#status-badge{padding:4px 12px;border-radius:20px;font-size:.75rem;font-weight:600;
+  background:#1e293b;color:var(--sub);transition:background .3s,color .3s}
+#status-badge.live{background:rgba(34,197,94,.18);color:var(--green)}
+#status-badge.processing{background:rgba(245,158,11,.18);color:var(--yellow)}
+#ctx-select{background:var(--bg3);color:var(--text);border:1px solid var(--border);
+  border-radius:6px;padding:4px 8px;font-size:.8rem}
+
+/* ── Layout ─────────────────────────────────────────────────── */
+.main{display:grid;grid-template-columns:1fr 280px 340px;height:calc(100vh - 52px);overflow:hidden;gap:0}
+
+/* ── Video panel ────────────────────────────────────────────── */
+.video-panel{background:#000;position:relative;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;overflow:hidden}
+#video-feed{width:100%;height:100%;object-fit:contain;display:none}
+#canvas-feed{width:100%;height:100%;object-fit:contain}
+.vid-overlay{position:absolute;top:10px;left:10px;display:flex;gap:8px;align-items:center}
+#rec-dot{width:10px;height:10px;border-radius:50%;background:#555}
+#rec-dot.active{background:var(--red);animation:blink 1s infinite}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.2}}
+#fps-label{font-size:.75rem;color:var(--sub)}
+.vid-bottom{position:absolute;bottom:0;left:0;right:0;
+  background:linear-gradient(transparent,rgba(0,0,0,.8));padding:12px 14px}
+#lip-text-box{font-size:.85rem;color:var(--accent);min-height:1.4em}
+.btn-row{display:flex;gap:8px;position:absolute;bottom:56px;left:50%;transform:translateX(-50%)}
+.btn{padding:8px 18px;border-radius:8px;border:none;cursor:pointer;font-weight:600;font-size:.82rem;transition:filter .2s}
+.btn:hover{filter:brightness(1.15)}
+#btn-start{background:var(--green);color:#000}
+#btn-stop{background:var(--red);color:#fff;display:none}
+#btn-upload{background:var(--accent2);color:#fff}
+
+/* ── Score panel ────────────────────────────────────────────── */
+.score-panel{background:var(--bg2);border-left:1px solid var(--border);
+  display:flex;flex-direction:column;gap:0;overflow-y:auto}
+.panel-title{padding:10px 14px;font-size:.72rem;font-weight:700;
+  letter-spacing:.08em;color:var(--sub);text-transform:uppercase;
+  border-bottom:1px solid var(--border)}
+
+/* Risk gauge */
+.gauge-wrap{display:flex;flex-direction:column;align-items:center;padding:16px 14px 8px}
+#gauge-canvas{width:180px;height:100px}
+#gauge-label{font-size:2rem;font-weight:800;margin-top:4px}
+#verdict-text{font-size:.78rem;color:var(--sub);text-align:center;padding:4px 8px 8px;line-height:1.4}
+
+/* Signal bars */
+.signals{padding:8px 14px}
+.signal-row{margin-bottom:8px}
+.signal-name{font-size:.72rem;color:var(--sub);text-transform:uppercase;letter-spacing:.06em;margin-bottom:3px}
+.signal-bar-bg{height:6px;background:#1e293b;border-radius:3px;overflow:hidden}
+.signal-bar-fill{height:100%;border-radius:3px;transition:width .4s ease}
+
+/* State cards */
+.states{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:12px 14px}
+.state-card{background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);
+  padding:10px 12px;display:flex;flex-direction:column;gap:3px}
+.sc-title{font-size:.68rem;color:var(--sub);text-transform:uppercase;letter-spacing:.06em}
+.sc-value{font-size:1rem;font-weight:700;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sc-note{font-size:.68rem;color:var(--sub);line-height:1.3}
+
+/* ── Timeline panel ─────────────────────────────────────────── */
+.timeline-panel{background:var(--bg2);border-left:1px solid var(--border);
+  display:flex;flex-direction:column;overflow:hidden}
+.chart-block{padding:12px 14px;flex:0 0 auto}
+#chart-timeline{height:110px}
+#chart-emotion{height:130px}
+
+/* Alerts */
+.alerts-block{flex:1;overflow-y:auto;padding:8px 14px}
+.alert-item{display:flex;gap:10px;align-items:flex-start;padding:7px 0;
+  border-bottom:1px solid var(--border);font-size:.78rem}
+.alert-time{color:var(--sub);white-space:nowrap;font-size:.7rem;padding-top:1px}
+.alert-msg{color:var(--text)}
+.alert-item.high .alert-msg{color:var(--red)}
+.alert-item.med  .alert-msg{color:var(--orange)}
+
+/* Running stats */
+.stats-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:0;
+  border-top:1px solid var(--border);border-bottom:1px solid var(--border)}
+.stat-cell{padding:10px 14px;text-align:center;border-right:1px solid var(--border)}
+.stat-cell:last-child{border-right:none}
+.stat-val{font-size:1.3rem;font-weight:700}
+.stat-lbl{font-size:.68rem;color:var(--sub);text-transform:uppercase;letter-spacing:.05em}
+
+/* Upload modal */
+#modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:100;
+  align-items:center;justify-content:center}
+#modal-overlay.show{display:flex}
+.modal{background:var(--bg2);border:1px solid var(--border);border-radius:14px;
+  padding:28px;min-width:400px;max-width:520px}
+.modal h3{font-size:1.1rem;margin-bottom:16px;color:var(--accent)}
+#drop-zone{border:2px dashed var(--border);border-radius:10px;padding:32px;
+  text-align:center;cursor:pointer;transition:border-color .2s}
+#drop-zone.drag{border-color:var(--accent)}
+#drop-zone p{color:var(--sub);font-size:.9rem}
+#file-input{display:none}
+#prog-bar-wrap{height:6px;background:#1e293b;border-radius:3px;margin-top:16px;display:none}
+#prog-bar-fill{height:100%;background:var(--accent);border-radius:3px;width:0;transition:width .3s}
+.modal-btns{display:flex;gap:10px;margin-top:18px;justify-content:flex-end}
+.btn-secondary{background:var(--bg3);color:var(--text);border:1px solid var(--border)}
+</style>
+</head>
+
+<body>
+
+<!-- ── Header ────────────────────────────────────────────────────────── -->
+<header>
+  <div class="logo">VERA <span>· Behavioral Analysis</span></div>
+  <div style="display:flex;gap:12px;align-items:center">
+    <select id="ctx-select" title="Analysis context">
+      <option value="interview">Interview</option>
+      <option value="exam">Exam Proctoring</option>
+      <option value="interrogation">Interrogation</option>
+      <option value="therapy">Therapy</option>
+    </select>
+    <span id="status-badge">● Offline</span>
+  </div>
+</header>
+
+<!-- ── Main ──────────────────────────────────────────────────────────── -->
+<div class="main">
+
+  <!-- Video panel -->
+  <div class="video-panel">
+    <video id="video-feed" autoplay muted playsinline></video>
+    <canvas id="canvas-feed"></canvas>
+    <div class="vid-overlay">
+      <div id="rec-dot"></div>
+      <span id="fps-label">0 fps</span>
+    </div>
+    <div class="btn-row">
+      <button class="btn" id="btn-start">▶ Start Live</button>
+      <button class="btn" id="btn-stop">■ Stop</button>
+      <button class="btn" id="btn-upload">⬆ Upload Video</button>
+    </div>
+    <div class="vid-bottom">
+      <div id="lip-text-box">LipNet output will appear here…</div>
+    </div>
+  </div>
+
+  <!-- Score panel -->
+  <div class="score-panel">
+    <div class="panel-title">Deception Risk</div>
+    <div class="gauge-wrap">
+      <canvas id="gauge-canvas" width="180" height="100"></canvas>
+      <div id="gauge-label" style="color:var(--green)">0%</div>
+      <div id="verdict-text">Awaiting data…</div>
+    </div>
+
+    <div class="panel-title">Signal Breakdown</div>
+    <div class="signals" id="signals-container">
+      <!-- injected by JS -->
+    </div>
+
+    <div class="panel-title">Live States</div>
+    <div class="states">
+      <div class="state-card">
+        <div class="sc-title">Emotion</div>
+        <div class="sc-value" id="sc-emotion">—</div>
+        <div class="sc-note" id="sc-emotion-note">—</div>
+      </div>
+      <div class="state-card">
+        <div class="sc-title">Gaze</div>
+        <div class="sc-value" id="sc-gaze">—</div>
+        <div class="sc-note" id="sc-gaze-note">—</div>
+      </div>
+      <div class="state-card">
+        <div class="sc-title">Blink Rate</div>
+        <div class="sc-value" id="sc-blink">—</div>
+        <div class="sc-note" id="sc-blink-note">Normal</div>
+      </div>
+      <div class="state-card">
+        <div class="sc-title">Head Pose</div>
+        <div class="sc-value" id="sc-head">—</div>
+        <div class="sc-note" id="sc-head-note">—</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Timeline panel -->
+  <div class="timeline-panel">
+    <div class="panel-title">Risk Timeline</div>
+    <div class="chart-block">
+      <canvas id="chart-timeline"></canvas>
+    </div>
+
+    <div class="panel-title">Emotion Distribution</div>
+    <div class="chart-block">
+      <canvas id="chart-emotion"></canvas>
+    </div>
+
+    <div class="stats-row">
+      <div class="stat-cell">
+        <div class="stat-val" id="stat-avg">—</div>
+        <div class="stat-lbl">Avg Risk</div>
+      </div>
+      <div class="stat-cell">
+        <div class="stat-val" id="stat-peak">—</div>
+        <div class="stat-lbl">Peak</div>
+      </div>
+      <div class="stat-cell">
+        <div class="stat-val" id="stat-frames">0</div>
+        <div class="stat-lbl">Frames</div>
+      </div>
+    </div>
+
+    <div class="panel-title">Alerts</div>
+    <div class="alerts-block" id="alerts-block">
+      <div style="color:var(--sub);font-size:.8rem;padding:6px 0">No alerts yet.</div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Upload Modal ───────────────────────────────────────────────────── -->
+<div id="modal-overlay">
+  <div class="modal">
+    <h3>Upload Video for Analysis</h3>
+    <div id="drop-zone">
+      <p>Drop a video file here or <u style="cursor:pointer" onclick="document.getElementById('file-input').click()">browse</u></p>
+      <input type="file" id="file-input" accept="video/*">
+    </div>
+    <div id="prog-bar-wrap"><div id="prog-bar-fill"></div></div>
+    <p id="upload-status" style="font-size:.8rem;color:var(--sub);margin-top:10px"></p>
+    <div class="modal-btns">
+      <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+      <button class="btn" id="btn-do-upload" style="background:var(--accent2);color:#fff" disabled>Analyse</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Chart.js ───────────────────────────────────────────────────────── -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+// ── Globals ────────────────────────────────────────────────────────────
+const SESSION_ID = crypto.randomUUID();
+let ws = null, stream = null;
+let sendInterval = null;
+let frameCount = 0, fpsStart = Date.now(), fps = 0;
+const riskHistory = [], riskLabels = [];
+const emotionCounts = {};
+const EMOTIONS = ['neutral','happy','sad','angry','surprise','fear','disgust','contempt'];
+EMOTIONS.forEach(e => emotionCounts[e] = 0);
+
+// ── DOM ────────────────────────────────────────────────────────────────
+const video      = document.getElementById('video-feed');
+const canvas     = document.getElementById('canvas-feed');
+const ctx        = canvas.getContext('2d');
+const btnStart   = document.getElementById('btn-start');
+const btnStop    = document.getElementById('btn-stop');
+const btnUpload  = document.getElementById('btn-upload');
+const statusBadge= document.getElementById('status-badge');
+const lipBox     = document.getElementById('lip-text-box');
+const ctxSelect  = document.getElementById('ctx-select');
+const recDot     = document.getElementById('rec-dot');
+const fpsLabel   = document.getElementById('fps-label');
+
+// ── Gauge ──────────────────────────────────────────────────────────────
+const gCtx = document.getElementById('gauge-canvas').getContext('2d');
+function drawGauge(score) {
+  const w=180, h=100, cx=w/2, cy=h-10, r=75;
+  gCtx.clearRect(0,0,w,h);
+  // track
+  gCtx.beginPath(); gCtx.arc(cx,cy,r,Math.PI,0);
+  gCtx.lineWidth=14; gCtx.strokeStyle='#1e293b'; gCtx.stroke();
+  // fill
+  const ang = Math.PI + (score/100)*Math.PI;
+  const color = score<35?'#22c55e':score<65?'#f97316':'#ef4444';
+  gCtx.beginPath(); gCtx.arc(cx,cy,r,Math.PI,ang);
+  gCtx.strokeStyle=color; gCtx.stroke();
+  // label
+  document.getElementById('gauge-label').style.color = color;
+  document.getElementById('gauge-label').textContent = score.toFixed(0)+'%';
+}
+drawGauge(0);
+
+// ── Timeline Chart ─────────────────────────────────────────────────────
+const timelineChart = new Chart(document.getElementById('chart-timeline'), {
+  type:'line',
+  data:{labels:riskLabels, datasets:[{
+    label:'Deception Risk %',
+    data:riskHistory,
+    borderColor:'#ef4444',fill:true,
+    backgroundColor:'rgba(239,68,68,.12)',
+    tension:.35,pointRadius:0,borderWidth:2
+  }]},
+  options:{
+    responsive:true, maintainAspectRatio:false,
+    animation:{duration:200},
+    scales:{
+      x:{display:false},
+      y:{min:0,max:100,grid:{color:'#1e293b'},ticks:{color:'#94a3b8',font:{size:10}}}
+    },
+    plugins:{legend:{display:false}}
+  }
+});
+
+// ── Emotion Chart ──────────────────────────────────────────────────────
+const EMO_COLORS=['#64748b','#22c55e','#60a5fa','#ef4444','#a78bfa','#f59e0b','#f97316','#ec4899'];
+const emoChart = new Chart(document.getElementById('chart-emotion'), {
+  type:'doughnut',
+  data:{
+    labels: EMOTIONS.map(e=>e.charAt(0).toUpperCase()+e.slice(1)),
+    datasets:[{data:EMOTIONS.map(()=>1),backgroundColor:EMO_COLORS,borderWidth:0}]
+  },
+  options:{
+    responsive:true, maintainAspectRatio:false,
+    plugins:{legend:{position:'right',labels:{color:'#94a3b8',font:{size:10},boxWidth:10,padding:6}}}
+  }
+});
+
+// ── Signal bars init ───────────────────────────────────────────────────
+const SIGNAL_NAMES = [
+  {key:'audio_visual_mismatch', label:'AV Mismatch'},
+  {key:'deceptive_emotion',     label:'Deceptive Emotion'},
+  {key:'elevated_blink_rate',   label:'Blink Rate'},
+  {key:'gaze_construction',     label:'Gaze Construct'},
+  {key:'head_turned_away',      label:'Head Away'},
+  {key:'silent_lip_movement',   label:'Silent Mouthing'},
+];
+const sigContainer = document.getElementById('signals-container');
+SIGNAL_NAMES.forEach(s => {
+  sigContainer.insertAdjacentHTML('beforeend', `
+    <div class="signal-row" id="sig-${s.key}">
+      <div style="display:flex;justify-content:space-between">
+        <span class="signal-name">${s.label}</span>
+        <span style="font-size:.7rem;color:var(--sub)" id="sig-val-${s.key}">0%</span>
+      </div>
+      <div class="signal-bar-bg"><div class="signal-bar-fill" id="sig-bar-${s.key}" style="width:0%;background:var(--sub)"></div></div>
+    </div>`);
+});
+
+function updateSignals(allSignals) {
+  if (!allSignals) return;
+  allSignals.forEach(s => {
+    const bar = document.getElementById('sig-bar-'+s.name);
+    const val = document.getElementById('sig-val-'+s.name);
+    if (!bar) return;
+    const pct = Math.min(s.contribution, 100);
+    bar.style.width = pct+'%';
+    bar.style.background = s.triggered
+      ? (pct>20?'#ef4444':pct>10?'#f97316':'#f59e0b')
+      : 'var(--sub)';
+    if (val) val.textContent = pct.toFixed(1)+'%';
+  });
+}
+
+// ── Stats accumulators ─────────────────────────────────────────────────
+let totalFrames=0, sumRisk=0, peakRisk=0;
+
+// ── WebSocket ──────────────────────────────────────────────────────────
+function connectWS() {
+  const proto = location.protocol==='https:'?'wss':'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws/analyze/${SESSION_ID}`);
+  ws.onopen  = () => { statusBadge.textContent='● Live'; statusBadge.className='live'; };
+  ws.onclose = () => { statusBadge.textContent='● Offline'; statusBadge.className=''; };
+  ws.onerror = e  => console.warn('WS error',e);
+  ws.onmessage = e => handleResult(JSON.parse(e.data));
+}
+
+function handleResult(data) {
+  if (data.type !== 'result') return;
+
+  // Annotated video
+  if (data.annotated) {
+    const img = new Image();
+    img.onload = () => {
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      ctx.drawImage(img,0,0);
+    };
+    img.src = data.annotated;
+  }
+
+  // LipNet text
+  if (data.lip_text) lipBox.textContent = '🗣 ' + data.lip_text;
+
+  // Deception
+  const dec = data.deception || {};
+  drawGauge(dec.score || 0);
+  document.getElementById('verdict-text').textContent = dec.verdict || '';
+  updateSignals(dec.all_signals);
+
+  // Running stats
+  totalFrames++;
+  sumRisk += (dec.score||0);
+  peakRisk = Math.max(peakRisk, dec.score||0);
+  document.getElementById('stat-frames').textContent = totalFrames;
+  document.getElementById('stat-avg').textContent   = (sumRisk/totalFrames).toFixed(0)+'%';
+  document.getElementById('stat-peak').textContent  = peakRisk.toFixed(0)+'%';
+
+  // Timeline
+  const now = new Date().toLocaleTimeString('en',{hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  riskLabels.push(now); riskHistory.push(dec.score||0);
+  if (riskHistory.length > 60) { riskLabels.shift(); riskHistory.shift(); }
+  timelineChart.update('none');
+
+  // Emotion
+  const emo = data.emotion || {};
+  const eLabel = (emo.label||'neutral').toLowerCase();
+  emotionCounts[eLabel] = (emotionCounts[eLabel]||0)+1;
+  emoChart.data.datasets[0].data = EMOTIONS.map(e=>emotionCounts[e]);
+  emoChart.update('none');
+
+  // State cards
+  document.getElementById('sc-emotion').textContent = emo.label || '—';
+  document.getElementById('sc-emotion-note').textContent = emo.is_deceptive ? '⚠ Deceptive pattern' : `${(emo.confidence||0).toFixed(0)}% confidence`;
+
+  const beh = data.behavior || {};
+  const gaze = beh.gaze || {};
+  const gi   = beh.gaze_interpretation || {};
+  document.getElementById('sc-gaze').textContent = gaze.direction || '—';
+  document.getElementById('sc-gaze-note').textContent = gi.meaning || '—';
+
+  const blink = beh.blink || {};
+  document.getElementById('sc-blink').textContent = (blink.rate||0).toFixed(0) + '/min';
+  document.getElementById('sc-blink-note').textContent = blink.elevated ? '⚠ Elevated' : 'Normal (baseline 15-20)';
+
+  const head = beh.head_pose || {};
+  document.getElementById('sc-head').textContent = head.direction || '—';
+  document.getElementById('sc-head-note').textContent = head.is_turned ? `⚠ Yaw ${head.yaw||0}°` : 'Facing forward';
+
+  // Alerts
+  if (data.alerts && data.alerts.length) {
+    const block = document.getElementById('alerts-block');
+    // only add newest
+    const last = data.alerts[data.alerts.length-1];
+    const cls = (dec.score||0) >= 60 ? 'high' : (dec.score||0) >= 35 ? 'med' : '';
+    block.insertAdjacentHTML('afterbegin', `
+      <div class="alert-item ${cls}">
+        <span class="alert-time">${last.time||now}</span>
+        <span class="alert-msg">${last.msg||''}</span>
+      </div>`);
+  }
+
+  // FPS counter
+  frameCount++;
+  const elapsed = (Date.now()-fpsStart)/1000;
+  if (elapsed >= 1) { fps=Math.round(frameCount/elapsed); fpsLabel.textContent=fps+' fps'; frameCount=0; fpsStart=Date.now(); }
+}
+
+// ── Camera ────────────────────────────────────────────────────────────
+async function startLive() {
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({video:{width:640,height:480,frameRate:15},audio:false});
+    video.srcObject = stream;
+    video.style.display = 'none';   // hidden — we draw annotated canvas
+    connectWS();
+    recDot.className = 'active';
+    btnStart.style.display = 'none';
+    btnStop.style.display  = '';
+    statusBadge.textContent = '● Connecting…';
+
+    const offscreen = document.createElement('canvas');
+    offscreen.width = 640; offscreen.height = 480;
+    const offCtx = offscreen.getContext('2d');
+
+    sendInterval = setInterval(() => {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      offCtx.drawImage(video, 0, 0, 640, 480);
+      const b64 = offscreen.toDataURL('image/jpeg', 0.7);
+      ws.send(JSON.stringify({type:'frame', data:b64}));
+    }, 100);  // 10 fps capture
+  } catch(e) {
+    alert('Camera access denied or unavailable: '+e.message);
+  }
+}
+
+function stopLive() {
+  clearInterval(sendInterval);
+  if (stream) stream.getTracks().forEach(t=>t.stop());
+  if (ws) ws.close();
+  recDot.className = '';
+  btnStart.style.display = '';
+  btnStop.style.display  = 'none';
+  statusBadge.textContent = '● Offline';
+  statusBadge.className   = '';
+}
+
+btnStart.onclick = startLive;
+btnStop.onclick  = stopLive;
+
+// ── Upload modal ──────────────────────────────────────────────────────
+btnUpload.onclick = () => document.getElementById('modal-overlay').classList.add('show');
+function closeModal() { document.getElementById('modal-overlay').classList.remove('show'); }
+
+let uploadFile = null;
+const fileInput = document.getElementById('file-input');
+const dropZone  = document.getElementById('drop-zone');
+const btnDoUp   = document.getElementById('btn-do-upload');
+const upStatus  = document.getElementById('upload-status');
+const progWrap  = document.getElementById('prog-bar-wrap');
+const progFill  = document.getElementById('prog-bar-fill');
+
+function setFile(f) {
+  uploadFile = f;
+  dropZone.querySelector('p').textContent = f.name;
+  btnDoUp.disabled = false;
+}
+fileInput.onchange = e => { if(e.target.files[0]) setFile(e.target.files[0]); };
+dropZone.ondragover = e => { e.preventDefault(); dropZone.classList.add('drag'); };
+dropZone.ondragleave= () => dropZone.classList.remove('drag');
+dropZone.ondrop     = e => {
+  e.preventDefault(); dropZone.classList.remove('drag');
+  if(e.dataTransfer.files[0]) setFile(e.dataTransfer.files[0]);
+};
+
+btnDoUp.onclick = async () => {
+  if (!uploadFile) return;
+  const ctx_val = ctxSelect.value;
+  const fd = new FormData();
+  fd.append('file', uploadFile);
+  fd.append('context', ctx_val);
+  btnDoUp.disabled = true;
+  upStatus.textContent = 'Uploading & analysing… (may take a moment)';
+  progWrap.style.display = 'block';
+  progFill.style.width = '30%';
+  statusBadge.textContent = '● Processing';
+  statusBadge.className = 'processing';
+  try {
+    const resp = await fetch('/analyze/video', {method:'POST', body:fd});
+    progFill.style.width = '90%';
+    const data = await resp.json();
+    progFill.style.width = '100%';
+    if (data.summary) {
+      const s = data.summary;
+      upStatus.textContent = `Done! Avg risk: ${s.average_score}%  Peak: ${s.peak_score}%  Frames: ${s.total_frames}`;
+      // push to timeline
+      if (s.signal_log) {
+        s.signal_log.forEach(l => {
+          riskLabels.push(l.time); riskHistory.push(l.score);
+          if(riskHistory.length>60){riskLabels.shift();riskHistory.shift();}
+        });
+        timelineChart.update();
+        drawGauge(s.average_score||0);
+        document.getElementById('stat-avg').textContent  = (s.average_score||0)+'%';
+        document.getElementById('stat-peak').textContent = (s.peak_score||0)+'%';
+        document.getElementById('stat-frames').textContent = s.total_frames||0;
+        document.getElementById('verdict-text').textContent =
+          s.average_score>=60 ? 'HIGH RISK session detected' :
+          s.average_score>=35 ? 'Moderate risk session' : 'Low risk session';
+        if (s.alerts) {
+          const block = document.getElementById('alerts-block');
+          s.alerts.forEach(a => {
+            block.insertAdjacentHTML('afterbegin',
+              `<div class="alert-item"><span class="alert-time">${a.time||''}</span><span class="alert-msg">${a.msg||''}</span></div>`);
+          });
+        }
+      }
+    }
+    statusBadge.textContent = '● Done';
+    statusBadge.className   = '';
+  } catch(e) {
+    upStatus.textContent = 'Error: ' + e.message;
+    statusBadge.textContent = '● Error';
+  }
+  btnDoUp.disabled = false;
+};
+</script>
+</body>
+</html>

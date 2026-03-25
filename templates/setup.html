@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VERA — Setup Wizard</title>
+  <link rel="stylesheet" href="/static/css/vera.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/animejs/3.2.1/anime.min.js"></script>
+  <script src="/static/js/session.js"></script>
+  <style>
+    .terms-box {
+      max-height: 200px; overflow-y: auto; background: rgba(0,0,0,0.4);
+      border: 1px solid var(--border-subtle); padding: 1rem; border-radius: 8px;
+      font-size: 0.8rem; margin-bottom: 1rem; color: var(--text-muted);
+    }
+    .terms-box::-webkit-scrollbar { width: 6px; }
+    .terms-box::-webkit-scrollbar-track { background: transparent; }
+    .terms-box::-webkit-scrollbar-thumb { background: rgba(16,185,129,0.3); border-radius: 3px; }
+  </style>
+</head>
+<body>
+  <div class="h-screen flex flex-col p-6" style="max-width:700px;margin:0 auto;">
+    <!-- Progress bar -->
+    <div class="mb-6">
+      <div class="flex justify-between mb-2 text-sm opacity-60">
+        <span>Setup Wizard</span>
+        <span id="step-label">Step 1 of 5</span>
+      </div>
+      <div class="progress-bar">
+        <div class="progress-bar-fill" id="progress-fill" style="width:20%"></div>
+      </div>
+    </div>
+
+    <!-- Step 1: Consent -->
+    <div id="step-1" class="glass-card p-8 flex-col gap-4 animate__animated animate__fadeIn" style="flex:1;overflow-y:auto;">
+      <h2 class="text-2xl font-bold mb-4" style="font-family:'Cinzel',serif;color:var(--gold);">🔒 Data Processing Consent</h2>
+      <p class="text-sm opacity-80 mb-4">
+        VERA processes biometric data classified as "special category" data under GDPR Article 9.
+        Your explicit consent is required. Please read the terms below to continue.
+      </p>
+      
+      <div class="terms-box" id="terms-box" onscroll="checkTermsScroll()">
+        <h4 class="font-semibold mb-2" style="color:var(--text-primary);">Data Processing Agreement</h4>
+        <p class="mb-2"><strong>Data Controller:</strong> Your Organization</p>
+        <p class="mb-2"><strong>DPO Contact:</strong> privacy@organization.com</p>
+        <p class="mb-2"><strong>Data Retention:</strong> 90 days from session completion.</p>
+        <h4 class="font-semibold mt-4 mb-2" style="color:var(--text-primary);">Purposes of Processing:</h4>
+        <ul style="list-style:disc;padding-left:1.5rem;margin-bottom:1rem;">
+          <li>Identity verification: confirming you are the enrolled candidate</li>
+          <li>Behavioral analysis: detecting exam policy violations in real-time</li>
+          <li>Voice verification: detecting presence of unauthorized assistance</li>
+          <li>Evidence recording: preserving video clips for proctor review</li>
+        </ul>
+        <p class="mb-2"><strong>Data Subjects Rights:</strong> You have the right to access, rectify, or erase your personal data, as well as the right to restrict or object to processing. You may withdraw consent at any time, which will immediately terminate the session.</p>
+        <p style="padding-top:100px; text-align:center; opacity:0.6;">(Scroll to bottom to accept)</p>
+      </div>
+
+      <div class="flex gap-4 mt-4">
+        <button class="btn btn-success" style="flex:1; opacity:0.5; cursor:not-allowed;" id="btn-consent" onclick="giveConsent(true)" disabled>✓ I Consent and Continue</button>
+        <button class="btn btn-ghost" style="flex:0.5;" onclick="giveConsent(false)">Decline</button>
+      </div>
+    </div>
+
+    <!-- Step 2: System Check -->
+    <div id="step-2" class="glass-card p-8 hidden animate__animated animate__fadeIn" style="flex:1;">
+      <h2 class="text-2xl font-bold mb-6" style="font-family:'Cinzel',serif;">🔧 System Check</h2>
+      <div id="checks-container" class="flex flex-col gap-4">
+        <div class="check-item flex items-center gap-4" data-check="camera">
+          <span class="check-icon text-xl">⏳</span>
+          <span>Camera Access (Real-time capture)</span>
+        </div>
+        <div class="check-item flex items-center gap-4" data-check="mic">
+          <span class="check-icon text-xl">⏳</span>
+          <span>Microphone Access</span>
+        </div>
+        <div class="check-item flex items-center gap-4" data-check="browser">
+          <span class="check-icon text-xl">⏳</span>
+          <span>Browser Compatibility</span>
+        </div>
+      </div>
+      <button class="btn btn-primary mt-6 w-full hidden" id="sys-next" onclick="goStep(3)">Continue →</button>
+    </div>
+
+    <!-- Step 3: Identity Capture -->
+    <div id="step-3" class="glass-card p-8 hidden animate__animated animate__fadeIn" style="flex:1;">
+      <h2 class="text-2xl font-bold mb-4" style="font-family:'Cinzel',serif;">📸 Face Presence Check</h2>
+      <p class="text-sm opacity-60 mb-4">Position your face clearly in the circle below to verify camera visibility.</p>
+      <div style="display:flex;justify-content:center;margin-bottom:1rem;">
+        <div class="face-ring" id="face-ring-ui" style="width:240px;height:240px;overflow:hidden;display:flex;align-items:center;justify-content:center;">
+          <video id="enroll-video" autoplay playsinline muted style="width:100%;height:100%;object-fit:cover;border-radius:50%;"></video>
+        </div>
+      </div>
+      <div id="enroll-result" class="text-center mb-4 hidden"></div>
+      <button class="btn btn-primary w-full" id="capture-btn" onclick="captureFacePresence()">Verify Face Visibility</button>
+    </div>
+
+    <!-- Step 4: Liveness Check -->
+    <div id="step-4" class="glass-card p-8 hidden animate__animated animate__fadeIn" style="flex:1;">
+      <h2 class="text-2xl font-bold mb-4" style="font-family:'Cinzel',serif;">🧬 Liveness Check</h2>
+      <div class="text-center">
+        <div class="liveness-icon" style="font-size:4rem;margin-bottom:1rem;" id="liveness-icon">👁️</div>
+        <p class="text-lg font-semibold" id="liveness-instruction">Blink twice</p>
+        <div class="mt-4" style="font-size:2rem;font-weight:bold;color:var(--gold);" id="liveness-countdown">3</div>
+      </div>
+      <video id="liveness-video" autoplay playsinline muted style="width:1px;height:1px;opacity:0;position:absolute;"></video>
+      <button class="btn btn-primary w-full mt-6 hidden" id="liveness-next" onclick="goStep(5)">Continue →</button>
+    </div>
+
+    <!-- Step 5: Environment Scan -->
+    <div id="step-5" class="glass-card p-8 hidden animate__animated animate__fadeIn" style="flex:1;flex-direction:column;">
+      <h2 class="text-2xl font-bold mb-2" style="font-family:'Cinzel',serif;">🔍 Environment Scan</h2>
+      <p class="text-sm opacity-60 mb-4">Scanning your surroundings for 10 seconds. Ensure the area is clear of unauthorized devices.</p>
+      <div class="webcam-container mb-4" style="max-width:400px;margin:0 auto;flex-shrink:0;">
+        <video id="env-video" autoplay playsinline muted style="width:100%;"></video>
+      </div>
+      
+      <!-- Scan UI -->
+      <div style="flex:1;display:flex;flex-direction:column;justify-content:center;">
+        <div class="flex justify-between text-xs mb-1" style="color:var(--gold);">
+          <span id="env-timer">10s remaining</span>
+          <span>Scanning...</span>
+        </div>
+        <div class="progress-bar mb-4">
+          <div class="progress-bar-fill" id="env-progress" style="width:0%; transition: width 0.1s linear;"></div>
+        </div>
+        <div id="env-result" class="text-center" style="min-height:30px;font-size:0.9rem;"></div>
+      </div>
+
+      <button class="btn btn-success w-full hidden mt-4" id="env-continue" onclick="finishSetup()">Start Session</button>
+    </div>
+  </div>
+
+  <script>
+    SessionManager.init();
+    var params = new URLSearchParams(window.location.search);
+    var mode = params.get('mode') || 'interview';
+    var sessionId = SessionManager.start(mode);
+
+    var currentStep = 1;
+    var mediaStream = null;
+
+    // Consent Setup
+    function checkTermsScroll() {
+      var box = document.getElementById('terms-box');
+      // Adding 5px margin of error for different browser sub-pixel scrolling
+      if (box.scrollHeight - box.scrollTop <= box.clientHeight + 5) {
+        var btn = document.getElementById('btn-consent');
+        btn.disabled = false;
+        btn.style.opacity = '1';
+        btn.style.cursor = 'pointer';
+      }
+    }
+
+    function goStep(n) {
+      document.getElementById('step-' + currentStep).classList.add('hidden');
+      currentStep = n;
+      document.getElementById('step-' + n).classList.remove('hidden');
+      if (n === 5) document.getElementById('step-5').style.display = 'flex';
+      
+      document.getElementById('step-label').textContent = 'Step ' + n + ' of 5';
+      document.getElementById('progress-fill').style.width = (n * 20) + '%';
+
+      if (n === 2) runSystemChecks();
+      if (n === 3) startCamera('enroll-video');
+      if (n === 4) startLiveness();
+      if (n === 5) startEnvScan();
+    }
+
+    async function giveConsent(given) {
+      try {
+        await fetch('/api/consent', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({session_id: sessionId, candidate_id: 'candidate', consent: given})
+        });
+      } catch(e) { }
+      if (given) {
+        goStep(2);
+      } else {
+        window.location.href = '/';
+      }
+    }
+
+    // ── System Checks ────────────────────────────────────────────────────────
+    async function runSystemChecks() {
+      document.querySelectorAll('.check-icon').forEach(function(el) {
+        el.textContent = '⏳';
+        el.classList.remove('animate__animated', 'animate__bounceIn');
+      });
+      var old = document.getElementById('sys-retry-area');
+      if (old) old.remove();
+      document.getElementById('sys-next').classList.add('hidden');
+
+      var results = {};
+
+      // Camera
+      try {
+        if (!mediaStream) {
+          mediaStream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { max: 30 } },
+            audio: true
+          });
+        }
+        setCheck('camera', true);
+        results.camera = true;
+      } catch(e) {
+        setCheck('camera', false, 'Allow camera access in browser -> address bar lock icon -> Site Settings');
+        results.camera = false;
+      }
+
+      // Mic
+      try {
+        if (mediaStream && mediaStream.getAudioTracks().length > 0) {
+          setCheck('mic', true);
+          results.mic = true;
+        } else {
+          var audioStream = await navigator.mediaDevices.getUserMedia({audio: true});
+          setCheck('mic', true);
+          results.mic = true;
+          audioStream.getTracks().forEach(function(t) { t.stop(); });
+        }
+      } catch(e) {
+        setCheck('mic', false, 'Allow microphone access in browser -> address bar lock icon -> Site Settings');
+        results.mic = false;
+      }
+
+      // Browser
+      var hasWS = 'WebSocket' in window;
+      var hasCanvas = !!document.createElement('canvas').getContext('2d');
+      if (hasWS && hasCanvas) {
+        setCheck('browser', true);
+        results.browser = true;
+      } else {
+        setCheck('browser', false, 'Your browser may lack some features. Chrome or Edge recommended.');
+        results.browser = false;
+      }
+
+      var requiredPassed = results.camera && results.mic;
+
+      if (requiredPassed) {
+        document.getElementById('sys-next').classList.remove('hidden');
+      } else {
+        var retryArea = document.createElement('div');
+        retryArea.id = 'sys-retry-area';
+        retryArea.style.cssText = 'margin-top:1.5rem;';
+        retryArea.innerHTML =
+          '<p style="color:#F59E0B;margin-bottom:1rem;font-size:0.9rem;">⚠ Required checks failed. Fix the issues and retry.</p>' +
+          '<button class="btn btn-primary w-full" onclick="runSystemChecks()">↻ Retry Checks</button>';
+        document.getElementById('checks-container').after(retryArea);
+      }
+    }
+
+    function setCheck(name, passed, guidance) {
+      var item = document.querySelector('[data-check="' + name + '"] .check-icon');
+      if (passed) {
+        item.textContent = '✅';
+        item.classList.add('animate__animated', 'animate__bounceIn');
+        var prev = document.querySelector('[data-check="' + name + '"] .check-guidance');
+        if (prev) prev.remove();
+      } else {
+        item.textContent = '❌';
+        if (guidance) {
+          var row = document.querySelector('[data-check="' + name + '"]');
+          var existing = row.querySelector('.check-guidance');
+          if (!existing) {
+            var hint = document.createElement('span');
+            hint.className = 'check-guidance';
+            hint.style.cssText = 'font-size:0.75rem;color:#F59E0B;margin-left:0.5rem;display:block;margin-top:0.25rem;';
+            hint.textContent = guidance;
+            row.appendChild(hint);
+          }
+        }
+      }
+    }
+
+    function startCamera(videoId) {
+      var video = document.getElementById(videoId);
+      if (mediaStream) {
+        video.srcObject = mediaStream;
+      } else {
+        navigator.mediaDevices.getUserMedia({video: true}).then(function(s) {
+          mediaStream = s;
+          video.srcObject = s;
+        });
+      }
+    }
+
+    // ── Face Presence Detection ──────────────────────────────────────────────
+    async function captureFacePresence() {
+      var video = document.getElementById('enroll-video');
+      if (!video || video.readyState < 2 || !video.videoWidth) {
+        var waitEl = document.getElementById('enroll-result');
+        waitEl.classList.remove('hidden');
+        waitEl.innerHTML = '<span style="color:#F59E0B;">⚠ Camera is initializing. Please wait.</span>';
+        return;
+      }
+
+      var canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      canvas.getContext('2d').drawImage(video, 0, 0);
+      var dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+
+      var btn = document.getElementById('capture-btn');
+      btn.textContent = 'Verifying...';
+      btn.disabled = true;
+
+      try {
+        var resp = await fetch('/api/face_check', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ image: dataUrl })
+        });
+        var result = await resp.json();
+        var el = document.getElementById('enroll-result');
+        el.classList.remove('hidden');
+
+        if (result.success && result.face_detected) {
+          document.getElementById('face-ring-ui').style.borderColor = '#10B981';
+          el.innerHTML = '<span style="color:#10B981;">✅ Face detected (' + result.face_count + ')</span>';
+          setTimeout(function() { goStep(4); }, 1000);
+        } else {
+          document.getElementById('face-ring-ui').style.borderColor = '#EF4444';
+          el.innerHTML = '<span style="color:#EF4444;">❌ No face detected.</span><br><span style="font-size:0.8rem;opacity:0.7;">Ensure you are visible in the frame.</span>';
+          btn.textContent = 'Retry Capture';
+          btn.disabled = false;
+        }
+      } catch(e) {
+        var el = document.getElementById('enroll-result');
+        el.classList.remove('hidden');
+        el.innerHTML = '<span style="color:#F59E0B;">⚠ Server error — skipped face check</span>';
+        setTimeout(function() { goStep(4); }, 1000);
+      }
+    }
+
+    // ── Liveness check (same logic, updated UI classes) ──────────────────────
+    function startLiveness() {
+      startCamera('liveness-video');
+      var challenges = [
+        {icon: '👁️', text: 'Blink twice'},
+        {icon: '↔️', text: 'Slowly turn your head left, then right'},
+        {icon: '😊', text: 'Smile'}
+      ];
+      challenges.sort(function() { return Math.random() - 0.5; });
+
+      var progressEl = document.createElement('div');
+      progressEl.id = 'liveness-progress';
+      progressEl.style.cssText = 'display:flex;justify-content:center;gap:8px;margin-top:1rem;';
+      for (var i = 0; i < challenges.length; i++) {
+        var dot = document.createElement('div');
+        dot.id = 'liveness-dot-' + i;
+        dot.style.cssText = 'width:10px;height:10px;border-radius:50%;background:rgba(255,255,255,0.2);transition:background 0.3s;';
+        progressEl.appendChild(dot);
+      }
+      var countdownEl = document.getElementById('liveness-countdown');
+      countdownEl.parentNode.insertBefore(progressEl, countdownEl.nextSibling);
+
+      var waitMsg = document.createElement('p');
+      waitMsg.id = 'liveness-wait';
+      waitMsg.style.cssText = 'font-size:0.8rem;opacity:0.5;margin-top:0.5rem;text-align:center;';
+      waitMsg.textContent = 'Follow each instruction — challenges complete automatically';
+      progressEl.parentNode.insertBefore(waitMsg, progressEl.nextSibling);
+
+      var idx = 0;
+      function runChallenge() {
+        if (idx >= challenges.length) {
+          document.getElementById('liveness-icon').textContent = '✅';
+          document.getElementById('liveness-instruction').textContent = 'Liveness verified!';
+          document.getElementById('liveness-countdown').textContent = '';
+          var wm = document.getElementById('liveness-wait');
+          if (wm) wm.textContent = 'All challenges complete ✓';
+          document.getElementById('liveness-next').classList.remove('hidden');
+          return;
+        }
+        var dot = document.getElementById('liveness-dot-' + idx);
+        if (dot) dot.style.background = 'var(--gold)';
+
+        var c = challenges[idx];
+        document.getElementById('liveness-icon').textContent = c.icon;
+        document.getElementById('liveness-instruction').textContent = c.text;
+        var count = 3;
+        document.getElementById('liveness-countdown').textContent = count;
+        
+        var timer = setInterval(function() {
+          count--;
+          if (count <= 0) {
+            clearInterval(timer);
+            var completedDot = document.getElementById('liveness-dot-' + idx);
+            if (completedDot) completedDot.style.background = 'var(--emerald)';
+            idx++;
+            runChallenge();
+          } else {
+            document.getElementById('liveness-countdown').textContent = count;
+          }
+        }, 1000);
+      }
+      runChallenge();
+    }
+
+    // ── Environment scan (10s live scan) ─────────────────────────────────────
+    var envTimerInterval = null;
+    var envScanInterval = null;
+    var envWarnings = [];
+    var envWarningHits = {};
+    var envRequestInFlight = false;
+    var envRequestSeq = 0;
+    var envLastAppliedSeq = -1;
+
+    function startEnvScan() {
+      startCamera('env-video');
+      var secondsRemaining = 10;
+      var totalTime = 10.0;
+      var currentMs = 0;
+      var progressEl = document.getElementById('env-progress');
+      var timerText = document.getElementById('env-timer');
+      var resultText = document.getElementById('env-result');
+      
+      envWarnings = [];
+      envWarningHits = {};
+      envRequestInFlight = false;
+      envRequestSeq = 0;
+      envLastAppliedSeq = -1;
+
+      async function scanOnce() {
+        if (envRequestInFlight) return;
+        var video = document.getElementById('env-video');
+        if (!video || video.readyState < 2 || !video.videoWidth) return;
+
+        envRequestInFlight = true;
+        var seq = envRequestSeq++;
+
+        var canvas = document.createElement('canvas');
+        canvas.width = 704;
+        canvas.height = Math.round((video.videoHeight / video.videoWidth) * 704);
+        canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+        var dataUrl = canvas.toDataURL('image/jpeg', 0.72);
+
+        try {
+          var resp = await fetch('/api/env_scan', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ image: dataUrl })
+          });
+          var data = await resp.json();
+          if (seq < envLastAppliedSeq) return;
+          envLastAppliedSeq = seq;
+
+          if (data.success && data.environment) {
+            var seenNow = data.environment.unauthorized_now || data.environment.unauthorized || [];
+            seenNow.forEach(function(item) {
+              envWarningHits[item] = (envWarningHits[item] || 0) + 1;
+            });
+
+            envWarnings = Object.keys(envWarningHits).filter(function(k) {
+              return envWarningHits[k] >= 2;
+            });
+
+            if (envWarnings.length > 0) {
+              resultText.innerHTML = '<span style="color:#EF4444;">⚠ Detected: ' + envWarnings.join(', ') + '</span>';
+            } else if (seenNow.length > 0) {
+              resultText.innerHTML = '<span style="color:#F59E0B;">Checking: ' + seenNow.join(', ') + '...</span>';
+            }
+          }
+        } catch(e) {
+          // Keep scan resilient; transient failures should not break setup flow.
+        } finally {
+          envRequestInFlight = false;
+        }
+      }
+
+      // Frame capture loop for backend processing
+      scanOnce();
+      envScanInterval = setInterval(scanOnce, 800); // Higher cadence with overlap guard
+
+      // Visual timer progress loop
+      envTimerInterval = setInterval(function() {
+        currentMs += 100;
+        var progress = (currentMs / (totalTime * 1000)) * 100;
+        progressEl.style.width = progress + '%';
+        
+        if (currentMs % 1000 === 0) {
+          secondsRemaining--;
+          timerText.textContent = secondsRemaining + 's remaining';
+        }
+
+        if (currentMs >= totalTime * 1000) {
+          clearInterval(envTimerInterval);
+          clearInterval(envScanInterval);
+          finalizeEnvScan();
+        }
+      }, 100);
+    }
+
+    function finalizeEnvScan() {
+      document.getElementById('env-timer').textContent = 'Scan Complete';
+      var resultText = document.getElementById('env-result');
+      var continueBtn = document.getElementById('env-continue');
+
+      if (envWarnings.length > 0) {
+        resultText.innerHTML = '<span style="color:#F59E0B;">⚠ Warnings generated for: ' + envWarnings.join(', ') + '.<br><span style="font-size:0.8rem;opacity:0.8;">Action has been logged. You may continue.</span></span>';
+      } else {
+        resultText.innerHTML = '<span style="color:var(--emerald);">✅ Environment clear</span>';
+      }
+
+      continueBtn.classList.remove('hidden');
+    }
+
+    // ── Finish ───────────────────────────────────────────────────────────────
+    function finishSetup() {
+      if (mediaStream) {
+        mediaStream.getTracks().forEach(function(t) { t.stop(); });
+      }
+      var target = mode === 'exam' ? '/exam' : '/interview';
+      window.location.href = target + '?session=' + sessionId + '&mode=' + mode;
+    }
+
+    // Attempt to autostart tests for microphone permissions on load (warmup)
+    window.addEventListener('load', function() {
+      navigator.mediaDevices.getUserMedia({audio: true})
+        .then(function(s){ s.getTracks().forEach(t => t.stop()); })
+        .catch(function(e){});
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,94 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# VERA — requirements_vera.txt
+# ALL packages verified 100% free, open-source, no commercial restrictions
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ── Web Server ──────────────────────────────────────────────────────────────
+fastapi>=0.110.0                  # MIT
+uvicorn[standard]>=0.29.0         # BSD-3
+websockets>=12.0                  # BSD-3
+python-multipart>=0.0.9           # Apache 2.0
+
+# ── Computer Vision & Face Analysis ────────────────────────────────────────
+mediapipe>=0.10.14                # Apache 2.0  — gaze, head pose, lip LDR, multi-face
+opencv-python>=4.9.0,<4.12        # Apache 2.0  — keep NumPy 1.x compatibility for TensorFlow/PyTorch stack
+opencv-contrib-python>=4.9.0,<4.12 # Apache 2.0 — matches MediaPipe/OpenCV NumPy 1.x compatibility
+opencv-python-headless>=4.9.0,<4.12 # Apache 2.0 — prevents transitive NumPy 2.x upgrades
+deepface>=0.0.92                  # MIT         — emotion, runs 100% locally, no API
+numpy==1.26.4                     # BSD
+Pillow>=10.3.0                    # HPND (free)
+
+# ── Identity Verification & Liveness ───────────────────────────────────────
+insightface>=0.7.3                # MIT         — ArcFace enroll + verify
+onnxruntime>=1.17.0               # MIT         — runs InsightFace + YOLOv8 ONNX
+
+# ── Audio Analysis ──────────────────────────────────────────────────────────
+openai-whisper>=20231117          # MIT         — 100% offline, zero API calls
+silero-vad>=5.1                   # MIT         — voice activity, fully offline
+speechbrain>=1.0.0                # Apache 2.0  — speaker verification, zero model gating
+
+# ── Deep Learning Backend ───────────────────────────────────────────────────
+torch==2.2.0                      # BSD         — required by silero-vad, speechbrain
+torchvision==0.17.0               # BSD
+timm>=0.9.16                      # Apache 2.0  — EfficientNet-B4 deepfake detection
+tensorflow==2.10.0                # Apache 2.0  — kept for lip_extractor.py (LipNet)
+
+# ── Database & Storage ──────────────────────────────────────────────────────
+sqlalchemy>=2.0.29                # MIT
+asyncpg>=0.29.0                   # Apache 2.0
+boto3>=1.34.0                     # Apache 2.0  — S3 client (pointed at local MinIO)
+minio>=7.2.5                      # Apache 2.0
+
+# ── Async Task Queue ────────────────────────────────────────────────────────
+celery>=5.3.6                     # BSD
+redis>=5.0.3                      # MIT
+
+# ── Security & Auth ─────────────────────────────────────────────────────────
+cryptography>=42.0.5              # Apache 2.0/BSD
+python-jose[cryptography]>=3.3.0  # MIT
+passlib[bcrypt]>=1.7.4            # BSD
+
+# ── Utilities ───────────────────────────────────────────────────────────────
+python-dotenv>=1.0.1              # BSD-3
+httpx>=0.27.0                     # BSD-3
+aiofiles>=23.2.1                  # Apache 2.0
+
+# ── Testing ─────────────────────────────────────────────────────────────────
+pytest>=8.1.1                     # MIT
+pytest-asyncio>=0.23.6            # Apache 2.0
+
+# ── REMOVED (do not add back) ───────────────────────────────────────────────
+# ultralytics      — REMOVED: AGPL-3, commercial licence violation
+#                   Use yolov8s.onnx + onnxruntime instead (see PART 2)
+# pyannote.audio   — REMOVED: Gated HuggingFace model (needs HF account + token)
+#                   Replaced by speechbrain (Apache 2.0, zero gating)
+# fer              — REMOVED: not needed, deepface covers emotion detection
+# difflib2         — REMOVED: Python stdlib difflib used instead
+
+# Speech-to-text for audio-visual sync (OpenAI — no training)
+openai-whisper
+
+# FastAPI backend + WebSocket
+fastapi==0.110.0
+uvicorn[standard]==0.29.0
+python-multipart==0.0.9
+jinja2==3.1.3
+
+# Audio processing
+sounddevice
+soundfile
+pyaudio; sys_platform != 'darwin'
+
+# Utilities
+# difflib is part of the Python standard library; no pip package is needed.
+Pillow
+requests
+tqdm
+kaggle
+
+# Optional: speaker diarization / voice print
+# resemblyzer
+# pyannote.audio
+
+# Optional: PDF report generation
+# reportlab
