@@ -1,10 +1,13 @@
 // FILE: src/hooks/useSession.ts
 // Session state + lifecycle — THE MASTER ORCHESTRATOR
-// This replaces vera_pipeline.py + deception_scorer.py entirely.
+// Zero-copy ImageBitmap, strict backpressure, parallel worker init, cooldown alerts
 
 'use client';
 
 import { useRef, useEffect, useCallback, useState } from 'react';
+import { io, type Socket } from 'socket.io-client';
+import { supabase } from '@/lib/supabase';
+import apiClient from '@/lib/api';
 import { useFaceWorker } from './useFaceWorker';
 import { useObjectWorker } from './useObjectWorker';
 import { useAudioWorker } from './useAudioWorker';
@@ -24,7 +27,6 @@ interface UseSessionOptions {
   sessionId: string;
   videoRef: React.RefObject<HTMLVideoElement | null>;
   canvasRef: React.RefObject<HTMLCanvasElement | null>;
-  // Optional session settings read from the session record (e.g. identity_threshold)
   sessionSettings?: Record<string, any>;
 }
 
@@ -41,12 +43,53 @@ export function useSession({ sessionId, videoRef, canvasRef, sessionSettings }: 
   const tickCountRef = useRef(0);
   const frameLoopRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // Socket and heartbeat refs
+  const socketRef = useRef<Socket | null>(null);
+  const heartbeatIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const candidateIdRef = useRef<string | null>(null);
+  const thumbnailCanvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  // Live HUD states
+  const [liveFaceCount, setLiveFaceCount] = useState<number>(0);
+  const [liveLastObject, setLiveLastObject] = useState<string>('Clear');
+  const [liveExpression, setLiveExpression] = useState<string>('neutral');
+  const [liveLipMovement, setLiveLipMovement] = useState<boolean>(false);
+  const [liveIdentityScore, setLiveIdentityScore] = useState<number | null>(null);
+  const [liveGazeStatus, setLiveGazeStatus] = useState<'Center' | 'Averted'>('Center');
+  const [liveBlinkRate, setLiveBlinkRate] = useState<number>(15);
+  const [latestTranscript, setLatestTranscript] = useState<string | null>(null);
+  const [liveSpeechActive, setLiveSpeechActive] = useState<boolean>(false);
+
+  // Audio PCM buffering for Whisper transcription (~3-4s chunks)
+  const speechSamplesBufferRef = useRef<Float32Array[]>([]);
+  const speechTotalSamplesRef = useRef(0);
+  const lastTranscribeTimeRef = useRef(0);
+
+  // Backpressure flags: drop-if-busy per worker
+  const faceInFlightRef = useRef(false);
+  const objectInFlightRef = useRef(false);
+
+  // ── Live worker-state refs (Fix: stale closure guard) ────────
+  // The frame-loop interval captures these refs, NOT the worker objects directly.
+  // When faceWorker/objectWorker re-render (isReady changes), the refs update
+  // via useEffect below, so the closure always reads live readiness.
+  const faceWorkerRef = useRef(faceWorker);
+  const objectWorkerRef = useRef(objectWorker);
+
+  // Active transient flag caches for discrete events
+  const activeTabSwitchRef = useRef(false);
+  const activeFullscreenRef = useRef(false);
+  const activeObjectRef = useRef(false);
+  const activeAudioRef = useRef(false);
+
+  // Alert cooldown map: flagType -> lastTriggerTimestamp (15s cooldown)
+  const lastAlertTimeRef = useRef<Record<string, number>>({});
+  const ALERT_COOLDOWN_MS = 15000;
+
   // Calibration state — first 60 seconds
-  // startTime initialised to NULL so calibration begins on first face detection
-  // (not on startSession() call, which fires 2s before the face is necessarily in frame).
   const calibrationRef = useRef({
     isCalibrated: false,
-    startTime: null as number | null,   // B3: starts on first face detected
+    startTime: null as number | null,
     headYawSamples: [] as number[],
     headPitchSamples: [] as number[],
     gazeXSamples: [] as number[],
@@ -60,57 +103,192 @@ export function useSession({ sessionId, videoRef, canvasRef, sessionSettings }: 
   });
 
   // ── 30-second WebM circular buffer ─────────
-  // MediaRecorder runs from session start, sliced every 2s.
-  // Ring array holds the last 15 chunks (15 × 2s = 30s).
-  // On a HIGH event the ring is drained → Blob → upload → clip_url attached.
   const RING_SIZE = 15;
   const TIMESLICE_MS = 2000;
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  // Ring buffer: fixed-length array with write-head pointer
   const ringBufferRef = useRef<Blob[]>([]);
-  const ringHeadRef = useRef(0); // next write slot (mod RING_SIZE)
+  const ringHeadRef = useRef(0);
   const cameraStreamRef = useRef<MediaStream | null>(null);
+
+  // Downscale offscreen canvas (320x240 for super-fast edge ML inference)
+  const downscaleCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const { setRiskScore, setCalibrated, setCalibrationStartTime } = useSessionStore();
 
-  // B6: Identity threshold — configurable per session, default 0.6
-  // Proctor can tighten to 0.65 for high-stakes exams, loosen to 0.55 for interviews.
-  const IDENTITY_THRESHOLD = (sessionSettings?.identity_threshold as number) ?? 0.6;
+  // ── Sync worker refs on every render so frame-loop closure is never stale ──
+  const audioWorkerRef = useRef(audioWorker);
+  const focusMonitorRef = useRef(focusMonitor);
+  const eventReporterRef = useRef(eventReporter);
+  useEffect(() => { faceWorkerRef.current = faceWorker; }, [faceWorker]);
+  useEffect(() => { objectWorkerRef.current = objectWorker; }, [objectWorker]);
+  useEffect(() => { audioWorkerRef.current = audioWorker; }, [audioWorker]);
+  useEffect(() => { focusMonitorRef.current = focusMonitor; }, [focusMonitor]);
+  useEffect(() => { eventReporterRef.current = eventReporter; }, [eventReporter]);
 
-  // B7: 3-frame phone confidence rolling buffer
+  const IDENTITY_THRESHOLD = (sessionSettings?.identity_threshold as number) ?? 0.6;
   const phoneConfBufferRef = useRef<number[]>([]);
   const PHONE_CONF_WINDOW = 3;
-  const PHONE_AVG_THRESHOLD = 0.40; // lower than single-frame threshold — catches angled phones
+  const PHONE_AVG_THRESHOLD = 0.40;
 
-  // ── Capture frame from video ───────────────────
-  const captureVideoFrame = useCallback((): ImageData | null => {
+  // ── Encode 16kHz mono WAV Blob from raw PCM samples ──────────
+function encodeWAV(samples: Float32Array, sampleRate = 16000): Blob {
+  const buffer = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(buffer);
+
+  const writeString = (offset: number, str: string) => {
+    for (let i = 0; i < str.length; i++) {
+      view.setUint8(offset + i, str.charCodeAt(i));
+    }
+  };
+
+  writeString(0, 'RIFF');
+  view.setUint32(4, 36 + samples.length * 2, true);
+  writeString(8, 'WAVE');
+  writeString(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true); // PCM format
+  view.setUint16(22, 1, true); // Mono channel
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true); // 16-bit
+  writeString(36, 'data');
+  view.setUint32(40, samples.length * 2, true);
+
+  let offset = 44;
+  for (let i = 0; i < samples.length; i++) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+    offset += 2;
+  }
+
+  return new Blob([buffer], { type: 'audio/wav' });
+}
+
+// ── Capture compressed 240x180 JPEG thumbnail for proctor live feed ──────────
+  const captureThumbnail = useCallback((): string | null => {
     const video = videoRef.current;
-    const canvas = canvasRef.current;
-    if (!video || !canvas) return null;
-
+    if (!video || video.readyState < 2) return null;
+    if (!thumbnailCanvasRef.current) {
+      thumbnailCanvasRef.current = document.createElement('canvas');
+      thumbnailCanvasRef.current.width = 240;
+      thumbnailCanvasRef.current.height = 180;
+    }
+    const canvas = thumbnailCanvasRef.current;
     const ctx = canvas.getContext('2d');
     if (!ctx) return null;
-
-    canvas.width = video.videoWidth || 640;
-    canvas.height = video.videoHeight || 480;
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-    return ctx.getImageData(0, 0, canvas.width, canvas.height);
-  }, [videoRef, canvasRef]);
+    ctx.drawImage(video, 0, 0, 240, 180);
+    return canvas.toDataURL('image/jpeg', 0.5);
+  }, [videoRef]);
 
   // ── Capture screenshot as base64 JPEG ──────────
   const captureScreenshot = useCallback((): string => {
+    const video = videoRef.current;
+    if (video && video.readyState >= 2) {
+      const snapCanvas = document.createElement('canvas');
+      snapCanvas.width = video.videoWidth || 640;
+      snapCanvas.height = video.videoHeight || 480;
+      const ctx = snapCanvas.getContext('2d');
+      if (ctx) {
+        ctx.drawImage(video, 0, 0, snapCanvas.width, snapCanvas.height);
+        return snapCanvas.toDataURL('image/jpeg', 0.6).split(',')[1] || '';
+      }
+    }
     const canvas = canvasRef.current;
     if (!canvas) return '';
-    return canvas.toDataURL('image/jpeg', 0.7).split(',')[1] || '';
-  }, [canvasRef]);
+    return canvas.toDataURL('image/jpeg', 0.6).split(',')[1] || '';
+  }, [videoRef, canvasRef]);
+
+  // ── Start 30s circular buffer ─────────────────
+  const startCircularBuffer = useCallback((stream: MediaStream) => {
+    if (mediaRecorderRef.current) return;
+    const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
+      ? 'video/webm;codecs=vp9'
+      : 'video/webm';
+
+    try {
+      const mr = new MediaRecorder(stream, { mimeType });
+      mr.ondataavailable = (evt) => {
+        if (evt.data && evt.data.size > 0) {
+          const ring = ringBufferRef.current;
+          const head = ringHeadRef.current;
+          if (ring.length < RING_SIZE) {
+            ring.push(evt.data);
+          } else {
+            ring[head] = evt.data;
+          }
+          ringHeadRef.current = (head + 1) % RING_SIZE;
+        }
+      };
+      mr.start(TIMESLICE_MS);
+      mediaRecorderRef.current = mr;
+      console.log('[useSession] Circular WebM buffer started');
+    } catch (e) {
+      console.warn('[useSession] MediaRecorder circular buffer error:', e);
+    }
+  }, []);
+
+  // ── Extract last 30s as a Blob (Declared BEFORE triggerHighAlert to avoid TDZ) ──
+  const extractClipBlob = useCallback((): Blob | null => {
+    const ring = ringBufferRef.current;
+    if (ring.length === 0) return null;
+
+    let ordered: Blob[];
+    if (ring.length < RING_SIZE) {
+      ordered = [...ring];
+    } else {
+      const head = ringHeadRef.current;
+      ordered = [
+        ...ring.slice(head),
+        ...ring.slice(0, head),
+      ];
+    }
+    return new Blob(ordered, { type: 'video/webm' });
+  }, []);
+
+  // ── High severity event handler (with 15s per-flag cooldown) ────────────────
+  const triggerHighAlert = useCallback(async (flagType: string, description: string) => {
+    const now = Date.now();
+    const lastAlert = lastAlertTimeRef.current[flagType] || 0;
+    if (now - lastAlert < ALERT_COOLDOWN_MS) {
+      return; // Skip duplicate alert within 15s cooldown
+    }
+    lastAlertTimeRef.current[flagType] = now;
+
+    const screenshot = captureScreenshot();
+    if (!screenshot) return;
+
+    let clipUrl: string | undefined;
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+      try {
+        mediaRecorderRef.current.requestData();
+        await new Promise<void>((resolve) => setTimeout(resolve, 50));
+        const clipBlob = extractClipBlob();
+        if (clipBlob && clipBlob.size > 0) {
+          clipUrl = await eventReporter.uploadClip(clipBlob, sessionId, flagType);
+        }
+      } catch (err) {
+        console.warn('[useSession] Clip upload failed (non-fatal):', err);
+      }
+    }
+
+    await eventReporter.sendHighEvent(
+      {
+        event_type: flagType,
+        severity: 'high',
+        risk_score: riskRef.current.lastScore,
+        description,
+        metadata: { clip_url: clipUrl },
+      },
+      screenshot,
+    );
+  }, [captureScreenshot, eventReporter, extractClipBlob, sessionId]);
 
   // ── Compute face flags from result ─────────────
   const computeFaceFlags = useCallback((result: any): Partial<RawFlags> => {
     const flags: Partial<RawFlags> = {};
     const cal = calibrationRef.current;
 
-    // No face / multiple faces
     if (result.faceCount === 0) {
       flags.no_face = 1;
     } else {
@@ -118,27 +296,24 @@ export function useSession({ sessionId, videoRef, canvasRef, sessionSettings }: 
     }
     flags.multiple_faces = result.faceCount > 1 ? 1 : 0;
 
-    // Head pose (only after calibration)
     if (result.headPose && cal.isCalibrated) {
       const yawDev = Math.abs(result.headPose.yaw - cal.baselines.headYawMean);
       const pitchDev = Math.abs(result.headPose.pitch - cal.baselines.headPitchMean);
       flags.head_turned = yawDev > cal.baselines.headYawThreshold ||
                           pitchDev > cal.baselines.headPitchThreshold ? 1 : 0;
-    } else if (!cal.isCalibrated) {
-      flags.head_turned = 0; // Do NOT emit during calibration
+    } else {
+      flags.head_turned = 0;
     }
 
-    // Gaze (only after calibration)
     if (result.gazeOffset && cal.isCalibrated) {
       const gazeXDev = Math.abs(result.gazeOffset.x - cal.baselines.gazeXMean);
       const gazeYDev = Math.abs(result.gazeOffset.y - cal.baselines.gazeYMean);
       flags.gaze_away = gazeXDev > cal.baselines.gazeXThreshold ||
                         gazeYDev > cal.baselines.gazeYThreshold ? 1 : 0;
-    } else if (!cal.isCalibrated) {
-      flags.gaze_away = 0; // Do NOT emit during calibration
+    } else {
+      flags.gaze_away = 0;
     }
 
-    // Identity mismatch — B6: use configurable threshold
     if (result.identityScore !== null && result.identityScore < IDENTITY_THRESHOLD) {
       flags.identity_mismatch = 1;
     } else {
@@ -149,14 +324,11 @@ export function useSession({ sessionId, videoRef, canvasRef, sessionSettings }: 
   }, [IDENTITY_THRESHOLD]);
 
   // ── Calibration: collect samples for first 60s ─
-  // B3: Only collect when faceCount === 1 (skip no-face AND multi-face frames).
-  // startTime is set on FIRST single-face frame, not on startSession().
   const collectCalibrationSample = useCallback((result: any) => {
     const cal = calibrationRef.current;
     if (cal.isCalibrated) return;
-    if (result.faceCount !== 1) return; // B3: skip non-single-face frames
+    if (result.faceCount !== 1) return;
 
-    // B3: Start the 60s clock on first face detection
     if (cal.startTime === null) {
       cal.startTime = Date.now();
       setCalibrationStartTime(cal.startTime);
@@ -172,7 +344,6 @@ export function useSession({ sessionId, videoRef, canvasRef, sessionSettings }: 
       cal.gazeYSamples.push(result.gazeOffset.y);
     }
 
-    // After 60 seconds, compute baselines
     const elapsed = Date.now() - cal.startTime;
     if (elapsed >= 60000 && cal.headYawSamples.length > 10) {
       const mean = (arr: number[]) => arr.reduce((a, b) => a + b, 0) / arr.length;
@@ -201,171 +372,111 @@ export function useSession({ sessionId, videoRef, canvasRef, sessionSettings }: 
     }
   }, [setCalibrated, setCalibrationStartTime]);
 
+  // ── Capture downscaled 320x240 frame (returns zero-copy ImageBitmap) ─────
+  const captureDownscaledBitmap = useCallback(async (): Promise<ImageBitmap | null> => {
+    const video = videoRef.current;
+    if (!video || video.readyState < 2) return null;
 
-  // ── High severity event handler ────────────────
-  // Captures screenshot + extracts 30s WebM clip from ring buffer.
-  const triggerHighAlert = useCallback(async (flagType: string, description: string) => {
-    const screenshot = captureScreenshot();
-    if (!screenshot) return;
+    if (!downscaleCanvasRef.current) {
+      downscaleCanvasRef.current = document.createElement('canvas');
+      downscaleCanvasRef.current.width = 320;
+      downscaleCanvasRef.current.height = 240;
+    }
+    const canvas = downscaleCanvasRef.current;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
 
-    // Pause MediaRecorder to get a clean final chunk, then resume
-    let clipUrl: string | undefined;
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
-      try {
-        // Request final timeslice flush synchronously
-        mediaRecorderRef.current.requestData();
-        // Small yield to let ondataavailable fire
-        await new Promise<void>((resolve) => setTimeout(resolve, 50));
+    ctx.drawImage(video, 0, 0, 320, 240);
 
-        const clipBlob = extractClipBlob();
-        if (clipBlob && clipBlob.size > 0) {
-          clipUrl = await eventReporter.uploadClip(clipBlob, sessionId, flagType);
-        }
-      } catch (err) {
-        console.warn('[useSession] Clip upload failed (non-fatal):', err);
+    // Also draw to candidate preview canvas if present
+    if (canvasRef.current) {
+      const prevCtx = canvasRef.current.getContext('2d');
+      if (prevCtx) {
+        canvasRef.current.width = video.videoWidth || 640;
+        canvasRef.current.height = video.videoHeight || 480;
+        prevCtx.drawImage(video, 0, 0, canvasRef.current.width, canvasRef.current.height);
       }
     }
 
-    await eventReporter.sendHighEvent(
-      {
-        event_type: flagType,
-        severity: 'high',
-        risk_score: riskRef.current.lastScore,
-        description,
-        metadata: { clip_url: clipUrl },
-      },
-      screenshot,
-    );
-  }, [captureScreenshot, eventReporter, extractClipBlob, sessionId]);
-
-  // ── Start 30s circular buffer ─────────────────
-  // Must be called with the camera MediaStream after getUserMedia succeeds.
-  const startCircularBuffer = useCallback((stream: MediaStream) => {
-    if (mediaRecorderRef.current) return; // already running
-    if (!MediaRecorder.isTypeSupported('video/webm;codecs=vp9')) {
-      console.warn('[useSession] VP9 not supported, falling back to default codec');
+    try {
+      return await createImageBitmap(canvas);
+    } catch {
+      return null;
     }
-    const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
-      ? 'video/webm;codecs=vp9'
-      : 'video/webm';
-
-    const mr = new MediaRecorder(stream, { mimeType });
-    mr.ondataavailable = (evt) => {
-      if (evt.data && evt.data.size > 0) {
-        const ring = ringBufferRef.current;
-        const head = ringHeadRef.current;
-        // Write into circular slot
-        if (ring.length < RING_SIZE) {
-          ring.push(evt.data);
-        } else {
-          ring[head] = evt.data;
-        }
-        ringHeadRef.current = (head + 1) % RING_SIZE;
-      }
-    };
-    mr.start(TIMESLICE_MS);
-    mediaRecorderRef.current = mr;
-    console.log('[useSession] Circular WebM buffer started');
-  }, []);
-
-  // ── Extract last 30s as a Blob ─────────────────
-  // Drains the ring in chronological order without clearing it.
-  const extractClipBlob = useCallback((): Blob | null => {
-    const ring = ringBufferRef.current;
-    if (ring.length === 0) return null;
-
-    // If buffer not yet full, chunks are already in order (0..len-1).
-    // If full, chronological order starts at ringHead (oldest) → ringHead-1 (newest).
-    let ordered: Blob[];
-    if (ring.length < RING_SIZE) {
-      ordered = [...ring];
-    } else {
-      const head = ringHeadRef.current;
-      ordered = [
-        ...ring.slice(head),   // oldest → end of array
-        ...ring.slice(0, head) // wrap-around → newest
-      ];
-    }
-    return new Blob(ordered, { type: 'video/webm' });
-  }, []);
+  }, [videoRef, canvasRef]);
 
   // ── Start session ──────────────────────────────
-  const startSession = useCallback(async (cameraStream?: MediaStream) => {
-    // Initialize all workers
-    faceWorker.init();
-    objectWorker.init();
-    await audioWorker.init();
-    focusMonitor.init(sessionId);
-
-    // Start 30s circular buffer on the camera stream
-    if (cameraStream) {
-      cameraStreamRef.current = cameraStream;
-      startCircularBuffer(cameraStream);
-    }
-
-    // Start calibration timer
-    // B3: startTime is now set on first face detection (not here).
-    // setCalibrationStartTime will be called from collectCalibrationSample.
-    // We reset the samples array here so they are clean for this session.
-    calibrationRef.current.startTime = null;
-    calibrationRef.current.isCalibrated = false;
-    calibrationRef.current.headYawSamples = [];
-    calibrationRef.current.headPitchSamples = [];
-    calibrationRef.current.gazeXSamples = [];
-    calibrationRef.current.gazeYSamples = [];
-
-    // 4. Receive face worker result → compute risk
+  const startSession = useCallback((cameraStream?: MediaStream) => {
+    // 1. Attach ALL onMessage handlers BEFORE calling init()
     faceWorker.onMessage((msg: any) => {
+      faceInFlightRef.current = false; // release backpressure
       if (msg.type !== 'FRAME_RESULT') return;
       const { result } = msg;
 
-      // Collect calibration samples during first 60s
       collectCalibrationSample(result);
+      const faceFlags = computeFaceFlags(result);
+      setLiveFaceCount(result.faceCount ?? 0);
+      if (result.expression) setLiveExpression(result.expression);
+      if (result.lipMovement !== undefined) setLiveLipMovement(result.lipMovement);
+      if (result.identityScore !== null) setLiveIdentityScore(result.identityScore);
+      if (result.blinkRate !== undefined) setLiveBlinkRate(result.blinkRate);
+      if (result.gazeOffset) {
+        setLiveGazeStatus(
+          Math.abs(result.gazeOffset.x) > 0.35 || Math.abs(result.gazeOffset.y) > 0.35
+            ? 'Averted'
+            : 'Center'
+        );
+      }
 
-      const flags = computeFaceFlags(result);
-      const fullFlags: RawFlags = {
-        identity_mismatch: flags.identity_mismatch ?? 0,
-        no_face: flags.no_face ?? 0,
-        multiple_faces: flags.multiple_faces ?? 0,
-        tab_switch: 0,
-        fullscreen_exit: 0,
-        head_turned: flags.head_turned ?? 0,
-        gaze_away: flags.gaze_away ?? 0,
-        object_detected: 0,
-        audio_activity: 0,
+      // Track sustained lip movement with audio activity telemetry
+      if (result.lipMovement && result.expression === 'talking') {
+        activeAudioRef.current = true;
+      }
+
+      // Clean raw flags (do NOT spread riskRef.current.smoothed)
+      const rawFlags: RawFlags = {
+        identity_mismatch: faceFlags.identity_mismatch ?? 0,
+        no_face: faceFlags.no_face ?? 0,
+        multiple_faces: faceFlags.multiple_faces ?? 0,
+        tab_switch: activeTabSwitchRef.current ? 1 : 0,
+        fullscreen_exit: activeFullscreenRef.current ? 1 : 0,
+        head_turned: faceFlags.head_turned ?? 0,
+        gaze_away: faceFlags.gaze_away ?? 0,
+        object_detected: activeObjectRef.current ? 1 : 0,
+        audio_activity: activeAudioRef.current ? 1 : 0,
         second_speaker: 0,
-        ...riskRef.current.smoothed,
-        ...flags,
-      } as RawFlags;
+      };
 
-      riskRef.current = updateRiskEWMA(fullFlags, riskRef.current);
+      riskRef.current = updateRiskEWMA(rawFlags, riskRef.current);
       const currentRisk = computeCompositeScore(riskRef.current);
       riskRef.current.lastScore = currentRisk;
       setRiskScore(currentRisk);
 
-      if (currentRisk >= RISK_THRESHOLDS.HIGH) {
-        if (result.faceCount === 0) {
-          triggerHighAlert('no_face', 'No face detected in camera frame');
-        } else if (result.faceCount > 1) {
-          triggerHighAlert('multiple_faces', `${result.faceCount} faces detected`);
-        } else if (flags.head_turned) {
+      // Direct high-alert triggers for sustained violations (protected by 15s cooldown)
+      if (result.faceCount === 0 && (riskRef.current.persistCounters.no_face ?? 0) >= 3) {
+        triggerHighAlert('no_face', 'No face detected in camera frame');
+      } else if (result.faceCount > 1 && (riskRef.current.persistCounters.multiple_faces ?? 0) >= 3) {
+        triggerHighAlert('multiple_faces', `${result.faceCount} faces detected`);
+      } else if (currentRisk >= RISK_THRESHOLDS.HIGH) {
+        if (faceFlags.head_turned) {
           triggerHighAlert('head_turned', 'Head turned away from screen');
+        } else if (faceFlags.identity_mismatch) {
+          triggerHighAlert('identity_mismatch', 'Candidate face does not match enrolled profile');
         }
       }
     });
 
-    // Object worker results — B7: 3-frame rolling average for phone detection
     objectWorker.onMessage((msg: any) => {
+      objectInFlightRef.current = false; // release backpressure
       if (msg.type !== 'FRAME_RESULT') return;
       const { detections } = msg;
 
-      // B7: Track rolling phone confidence across 3 frames to catch angled/partial phones
       const phoneConf = Math.max(
         0,
         ...detections
           .filter((d: any) => d.class === 'cell phone')
           .map((d: any) => d.confidence as number),
-        0, // ensure at least one value
+        0,
       );
       phoneConfBufferRef.current.push(phoneConf);
       if (phoneConfBufferRef.current.length > PHONE_CONF_WINDOW) {
@@ -374,8 +485,6 @@ export function useSession({ sessionId, videoRef, canvasRef, sessionSettings }: 
       const avgPhoneConf = phoneConfBufferRef.current.reduce((a, b) => a + b, 0)
                          / phoneConfBufferRef.current.length;
 
-      // Flag using 3-frame average (catches 0.42, 0.45, 0.41 across frames)
-      // OR single-frame high confidence for other objects
       const flaggedObjects = detections.filter((d: any) => {
         if (d.class === 'cell phone') return avgPhoneConf > PHONE_AVG_THRESHOLD;
         if (d.class === 'book' && d.confidence > 0.65) return true;
@@ -383,12 +492,16 @@ export function useSession({ sessionId, videoRef, canvasRef, sessionSettings }: 
         return false;
       });
 
+      activeObjectRef.current = flaggedObjects.length > 0;
       if (flaggedObjects.length > 0) {
-        riskRef.current = updateRiskEWMA(
-          { ...riskRef.current.smoothed, object_detected: 1 } as unknown as RawFlags,
-          riskRef.current,
-        );
+        setLiveLastObject(flaggedObjects[0].class);
+      } else if (detections.length > 0) {
+        setLiveLastObject(detections[0].class);
+      } else {
+        setLiveLastObject('Clear');
+      }
 
+      if (flaggedObjects.length > 0) {
         for (const obj of flaggedObjects) {
           eventReporter.addEvent({
             event_type: 'object_detected',
@@ -399,30 +512,22 @@ export function useSession({ sessionId, videoRef, canvasRef, sessionSettings }: 
           });
         }
 
-        if (riskRef.current.lastScore >= RISK_THRESHOLDS.HIGH) {
-          triggerHighAlert('object_detected',
-            `Objects detected: ${flaggedObjects.map((o: any) => o.class).join(', ')}`);
-        }
-      } else {
-        riskRef.current = updateRiskEWMA(
-          { ...riskRef.current.smoothed, object_detected: 0 } as unknown as RawFlags,
-          riskRef.current,
+        // Trigger high alert directly whenever prohibited objects are detected
+        triggerHighAlert(
+          'object_detected',
+          `Objects detected: ${flaggedObjects.map((o: any) => o.class).join(', ')}`
         );
       }
     });
 
-    // Audio worker results — B5: gate all audio flags until face calibration is complete
     audioWorker.onMessage((msg: any) => {
       if (msg.type === 'AUDIO_RESULT') {
         const { result } = msg;
-        // B5: suppress audio flags during the sacred calibration window
+        setLiveSpeechActive(!!result.speechDetected);
         if (!calibrationRef.current.isCalibrated) return;
 
+        activeAudioRef.current = !!result.speechDetected;
         if (result.speechDetected) {
-          riskRef.current = updateRiskEWMA(
-            { ...riskRef.current.smoothed, audio_activity: 1 } as unknown as RawFlags,
-            riskRef.current,
-          );
           eventReporter.addEvent({
             event_type: 'audio_activity',
             severity: 'low',
@@ -430,30 +535,58 @@ export function useSession({ sessionId, videoRef, canvasRef, sessionSettings }: 
             description: 'Speech activity detected',
             metadata: { rmsEnergy: result.rmsEnergy },
           });
-        } else {
-          riskRef.current = updateRiskEWMA(
-            { ...riskRef.current.smoothed, audio_activity: 0 } as unknown as RawFlags,
-            riskRef.current,
-          );
+        }
+      } else if (msg.type === 'SPEECH_CHUNK' && msg.pcmData) {
+        setLiveSpeechActive(true);
+        speechSamplesBufferRef.current.push(msg.pcmData);
+        speechTotalSamplesRef.current += msg.pcmData.length;
+
+        // When ~3 seconds of speech is buffered (48,000 samples @ 16kHz)
+        if (speechTotalSamplesRef.current >= 48000) {
+          const now = Date.now();
+          if (now - lastTranscribeTimeRef.current >= 15000) {
+            lastTranscribeTimeRef.current = now;
+            const merged = new Float32Array(speechTotalSamplesRef.current);
+            let offset = 0;
+            for (const chunk of speechSamplesBufferRef.current) {
+              merged.set(chunk, offset);
+              offset += chunk.length;
+            }
+            const wavBlob = encodeWAV(merged, 16000);
+            const formData = new FormData();
+            formData.append('file', wavBlob, 'speech.wav');
+
+            apiClient
+              .post('/api/events/transcribe', formData)
+              .then((res) => {
+                const transcript = res.data?.transcript;
+                if (transcript) {
+                  setLatestTranscript(transcript);
+                  eventReporter.addEvent({
+                    event_type: 'audio_activity',
+                    severity: 'medium',
+                    risk_score: riskRef.current.lastScore,
+                    description: `Speech transcript: "${transcript.slice(0, 80)}"`,
+                    metadata: { transcript },
+                  });
+                }
+              })
+              .catch(() => {});
+          }
+          speechSamplesBufferRef.current = [];
+          speechTotalSamplesRef.current = 0;
         }
       }
     });
 
-    // Focus events
     focusMonitor.onEvent((event) => {
-      const flagMap: Record<string, FlagKey> = {
-        tab_switch: 'tab_switch',
-        fullscreen_exit: 'fullscreen_exit',
-        copy_paste: 'tab_switch', // map to tab_switch flag
-        context_switch: 'tab_switch',
-        dev_tools: 'tab_switch',
-      };
-
-      const flagKey = flagMap[event.type] || 'tab_switch';
-      riskRef.current = updateRiskEWMA(
-        { ...riskRef.current.smoothed, [flagKey]: 1 } as unknown as RawFlags,
-        riskRef.current,
-      );
+      if (event.type === 'fullscreen_exit') {
+        activeFullscreenRef.current = true;
+        setTimeout(() => { activeFullscreenRef.current = false; }, 3000);
+      } else {
+        activeTabSwitchRef.current = true;
+        setTimeout(() => { activeTabSwitchRef.current = false; }, 3000);
+      }
 
       eventReporter.addEvent({
         event_type: event.type === 'copy_paste' ? 'copy_paste'
@@ -465,32 +598,142 @@ export function useSession({ sessionId, videoRef, canvasRef, sessionSettings }: 
         description: event.detail || event.type,
       });
 
-      if (event.severity === 'high') {
+      if (event.type === 'tab_switch' || event.type === 'fullscreen_exit' || event.severity === 'high') {
         triggerHighAlert(event.type, event.detail || event.type);
       }
     });
 
-    // 3. Frame loop — runs at 8fps (not 30fps — saves CPU, enough for proctoring)
-    frameLoopRef.current = setInterval(() => {
-      const frame = captureVideoFrame();
-      if (!frame) return;
+    // 2. Initialize all workers in parallel (non-blocking)
+    faceWorker.init();
+    objectWorker.init();
+    audioWorker.init(); // do not await
+    focusMonitor.init(sessionId);
 
-      faceWorker.send({ type: 'ANALYZE_FRAME', imageData: frame, frameId: tickCountRef.current });
+    // Load enrollment descriptor if available
+    try {
+      const savedDescriptor = localStorage.getItem(`sentinel_enrolled_${sessionId}`);
+      if (savedDescriptor) {
+        const parsed = JSON.parse(savedDescriptor);
+        if (Array.isArray(parsed) && parsed.length === 128) {
+          faceWorker.setEnrollment(parsed);
+        }
+      }
+    } catch {}
 
-      // Object worker runs at 4fps (every other tick) to save CPU
-      if (tickCountRef.current % 2 === 0) {
-        objectWorker.send({ type: 'ANALYZE_FRAME', imageData: frame, frameId: tickCountRef.current });
+    // 3. Connect Socket.IO for candidate heartbeat and proctor warnings
+    const socketUrl = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:8000';
+    const socket = io(socketUrl, {
+      transports: ['websocket', 'polling'],
+      autoConnect: true,
+    });
+    socketRef.current = socket;
+
+    // Helper: get a valid Supabase auth session, refreshing if expired
+    const getAuthSession = async () => {
+      let { data: { session: s } } = await supabase.auth.getSession();
+      if (!s) {
+        // Token may have expired — attempt a silent refresh once
+        const { data: refreshed } = await supabase.auth.refreshSession();
+        s = refreshed.session;
+      }
+      return s;
+    };
+
+    getAuthSession().then((authSession) => {
+      if (!authSession) {
+        console.warn('[useSession] No auth session found after refresh — heartbeat disabled');
+        return;
+      }
+      const token = authSession.access_token;
+      const userId = authSession.user.id;
+      candidateIdRef.current = userId;
+
+      // Immediately announce presence to proctor room
+      socket.emit('candidate_join', { sessionId, token });
+      socket.on('connect', () => {
+        socket.emit('candidate_join', { sessionId, token });
+      });
+
+      // Listen for warnings intended for this candidate
+      socket.on('proctor_warning', (data: any) => {
+        if (data.candidateId === userId) {
+          useSessionStore.getState().addWarning(data.message);
+        }
+      });
+
+      // Fix 3: Listen for session_ended broadcast from proctor
+      socket.on('session_ended', () => {
+        console.log('[useSession] session_ended received — stopping candidate session');
+        stopSession();
+        useSessionStore.getState().setStatus('ended');
+      });
+
+      // Emit candidate heartbeat every 1.5s with compressed thumbnail and risk score
+      if (heartbeatIntervalRef.current) clearInterval(heartbeatIntervalRef.current);
+      heartbeatIntervalRef.current = setInterval(() => {
+        if (!socket.connected) return;
+        const thumbnail = captureThumbnail();
+        socket.emit('candidate_heartbeat', {
+          sessionId,
+          token,
+          status: 'online',
+          riskLevel: riskRef.current.lastScore,
+          thumbnail,
+        });
+      }, 1500);
+    });
+
+    // 4. Start 30s circular buffer on camera stream
+    if (cameraStream) {
+      cameraStreamRef.current = cameraStream;
+      startCircularBuffer(cameraStream);
+    }
+
+    calibrationRef.current.startTime = null;
+    calibrationRef.current.isCalibrated = false;
+    calibrationRef.current.headYawSamples = [];
+    calibrationRef.current.headPitchSamples = [];
+    calibrationRef.current.gazeXSamples = [];
+    calibrationRef.current.gazeYSamples = [];
+
+    // 5. Frame dispatch loop — runs at 8fps tick (125ms)
+    // Face worker throttled to ~4 FPS (every 250ms), Object worker to ~1-2 FPS (every 500ms)
+    // Enforces strict in-flight drop-if-busy backpressure with zero-copy ImageBitmap.
+    // Uses faceWorkerRef / objectWorkerRef (not direct hook objects) to avoid stale closures
+    // when isReady flips from false→true after the interval was created.
+    frameLoopRef.current = setInterval(async () => {
+      const tick = tickCountRef.current++;
+
+      // Face analysis: ~4 FPS (every 2nd tick = 250ms)
+      if (tick % 2 === 0 && faceWorkerRef.current.isReady && !faceInFlightRef.current) {
+        const bitmap = await captureDownscaledBitmap();
+        if (bitmap) {
+          faceInFlightRef.current = true;
+          faceWorkerRef.current.send(
+            { type: 'ANALYZE_FRAME', bitmap, frameId: tick, timestamp: performance.now() },
+            [bitmap]
+          );
+        }
       }
 
-      tickCountRef.current++;
-    }, 125); // 8fps
+      // Object analysis: ~1.5 FPS (every 4th tick = 500ms)
+      if (tick % 4 === 0 && objectWorkerRef.current.isReady && !objectInFlightRef.current) {
+        const bitmap = await captureDownscaledBitmap();
+        if (bitmap) {
+          objectInFlightRef.current = true;
+          objectWorkerRef.current.send(
+            { type: 'ANALYZE_FRAME', bitmap, frameId: tick },
+            [bitmap]
+          );
+        }
+      }
+    }, 125);
 
-    // Start auto-flushing events every 10s
     eventReporter.startAutoFlush();
   }, [
     sessionId, faceWorker, objectWorker, audioWorker, focusMonitor,
-    eventReporter, captureVideoFrame, computeFaceFlags, collectCalibrationSample,
-    triggerHighAlert, setRiskScore, setCalibrationStartTime,
+    eventReporter, captureDownscaledBitmap, computeFaceFlags, collectCalibrationSample,
+    triggerHighAlert, setRiskScore, setCalibrationStartTime, startCircularBuffer, captureThumbnail,
   ]);
 
   // ── Stop session ───────────────────────────────
@@ -500,27 +743,39 @@ export function useSession({ sessionId, videoRef, canvasRef, sessionSettings }: 
       frameLoopRef.current = null;
     }
 
-    faceWorker.terminate();
-    objectWorker.terminate();
-    audioWorker.terminate();
-    focusMonitor.terminate();
-    eventReporter.stopAutoFlush(); // flushes pending batch events on stop
+    if (heartbeatIntervalRef.current) {
+      clearInterval(heartbeatIntervalRef.current);
+      heartbeatIntervalRef.current = null;
+    }
 
-    // Stop circular buffer
+    if (socketRef.current) {
+      socketRef.current.disconnect();
+      socketRef.current = null;
+    }
+
+    faceWorkerRef.current?.terminate();
+    objectWorkerRef.current?.terminate();
+    audioWorkerRef.current?.terminate();
+    focusMonitorRef.current?.terminate();
+    eventReporterRef.current?.stopAutoFlush();
+
+    speechSamplesBufferRef.current = [];
+    speechTotalSamplesRef.current = 0;
+
     if (mediaRecorderRef.current) {
-      try { mediaRecorderRef.current.stop(); } catch { /* already stopped */ }
+      try { mediaRecorderRef.current.stop(); } catch {}
       mediaRecorderRef.current = null;
     }
-    // Clear ring buffer
     ringBufferRef.current = [];
     ringHeadRef.current = 0;
     cameraStreamRef.current = null;
-  }, [faceWorker, objectWorker, audioWorker, focusMonitor, eventReporter]);
+  }, []);
 
-  // Cleanup on unmount
+  const stopSessionRef = useRef(stopSession);
+  useEffect(() => { stopSessionRef.current = stopSession; });
   useEffect(() => {
-    return () => { stopSession(); };
-  }, [stopSession]);
+    return () => { stopSessionRef.current(); };
+  }, []);
 
   return {
     startSession,
@@ -529,6 +784,16 @@ export function useSession({ sessionId, videoRef, canvasRef, sessionSettings }: 
     objectWorker,
     audioWorker,
     focusMonitor,
-    extractClipBlob, // exposed for testing
+    extractClipBlob,
+    liveFaceCount,
+    liveLastObject,
+    liveExpression,
+    liveLipMovement,
+    liveIdentityScore,
+    liveGazeStatus,
+    liveBlinkRate,
+    latestTranscript,
+    liveSpeechActive,
+    isCalibrated: calibrationRef.current.isCalibrated,
   };
 }

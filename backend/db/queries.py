@@ -187,6 +187,23 @@ async def insert_event(
     return dict(row)
 
 
+async def update_event_evidence(
+    event_id: str, screenshot_url: Optional[str] = None, gemini_verdict: Optional[str] = None
+) -> Optional[dict]:
+    pool = get_pool()
+    row = await pool.fetchrow(
+        """
+        UPDATE public.malpractice_events
+        SET screenshot_url = COALESCE($2, screenshot_url),
+            gemini_verdict = COALESCE($3, gemini_verdict)
+        WHERE id = $1
+        RETURNING *
+        """,
+        event_id, screenshot_url, gemini_verdict
+    )
+    return dict(row) if row else None
+
+
 async def insert_events_batch(
     events: list, candidate_id: str
 ) -> int:

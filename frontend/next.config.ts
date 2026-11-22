@@ -4,14 +4,21 @@ const nextConfig: NextConfig = {
   // Standalone output for Docker deployment
   output: "standalone",
 
-  // Headers for WASM and SharedArrayBuffer (required for workers)
+  turbopack: {},
+
+  // Experimental package optimizations for faster builds & rendering
+  experimental: {
+    optimizePackageImports: ["lucide-react", "date-fns", "chart.js"],
+  },
+
+  // Headers for WASM and SharedArrayBuffer (credentialless prevents blocking external iframes/media)
   async headers() {
     return [
       {
         source: "/(.*)",
         headers: [
           { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
-          { key: "Cross-Origin-Embedder-Policy", value: "require-corp" },
+          { key: "Cross-Origin-Embedder-Policy", value: "credentialless" },
         ],
       },
     ];

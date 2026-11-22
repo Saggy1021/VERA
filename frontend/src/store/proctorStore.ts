@@ -33,7 +33,9 @@ export interface ProctorState {
 
   // Actions
   setSessionId: (id: string) => void;
+  setCandidates: (candidates: Record<string, CandidateLiveData>) => void;
   updateCandidate: (candidateId: string, data: Partial<CandidateLiveData>) => void;
+  setAlerts: (alerts: AlertEvent[]) => void;
   addAlert: (alert: AlertEvent) => void;
   setSelectedCandidate: (candidateId: string | null) => void;
   reset: () => void;
@@ -47,6 +49,8 @@ export const useProctorStore = create<ProctorState>((set) => ({
 
   setSessionId: (id) => set({ sessionId: id }),
 
+  setCandidates: (candidates) => set({ candidates }),
+
   updateCandidate: (candidateId, data) =>
     set((state) => ({
       candidates: {
@@ -59,10 +63,20 @@ export const useProctorStore = create<ProctorState>((set) => ({
       },
     })),
 
+  setAlerts: (alerts) => set({ alerts }),
+
   addAlert: (alert) =>
-    set((state) => ({
-      alerts: [alert, ...state.alerts].slice(0, 100), // Keep last 100 alerts
-    })),
+    set((state) => {
+      if (state.alerts.some((a) => a.id === alert.id)) {
+        return state;
+      }
+      const candidateName =
+        alert.candidateName || state.candidates[alert.candidateId]?.name || 'Candidate';
+      const enrichedAlert = { ...alert, candidateName };
+      return {
+        alerts: [enrichedAlert, ...state.alerts].slice(0, 100),
+      };
+    }),
 
   setSelectedCandidate: (candidateId) =>
     set({ selectedCandidateId: candidateId }),

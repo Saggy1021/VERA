@@ -26,23 +26,34 @@ export const FLAG_WEIGHTS: Record<FlagKey, FlagConfig> = {
   // Identity
   identity_mismatch:   { weight: 0.20, threshold: 0.6,  persistFrames: 5,  severity: 'critical' },
   // Presence
-  no_face:             { weight: 0.18, threshold: 1.0,  persistFrames: 4,  severity: 'high' },
-  multiple_faces:      { weight: 0.12, threshold: 0.8,  persistFrames: 6,  severity: 'high' },
+  no_face:             { weight: 0.18, threshold: 0.5,  persistFrames: 4,  severity: 'high' },
+  multiple_faces:      { weight: 0.12, threshold: 0.6,  persistFrames: 4,  severity: 'high' },
   // Focus
-  tab_switch:          { weight: 0.12, threshold: 1.0,  persistFrames: 1,  severity: 'high' },
-  fullscreen_exit:     { weight: 0.10, threshold: 1.0,  persistFrames: 1,  severity: 'medium' },
+  tab_switch:          { weight: 0.12, threshold: 0.5,  persistFrames: 1,  severity: 'high' },
+  fullscreen_exit:     { weight: 0.10, threshold: 0.5,  persistFrames: 1,  severity: 'medium' },
   // Head / Gaze
-  head_turned:         { weight: 0.08, threshold: 0.7,  persistFrames: 8,  severity: 'medium' },
-  gaze_away:           { weight: 0.06, threshold: 0.65, persistFrames: 10, severity: 'low' },
+  head_turned:         { weight: 0.08, threshold: 0.6,  persistFrames: 6,  severity: 'medium' },
+  gaze_away:           { weight: 0.06, threshold: 0.6,  persistFrames: 8,  severity: 'low' },
   // Objects
-  object_detected:     { weight: 0.08, threshold: 0.55, persistFrames: 3,  severity: 'high' },
+  object_detected:     { weight: 0.08, threshold: 0.5,  persistFrames: 3,  severity: 'high' },
   // Audio
-  audio_activity:      { weight: 0.04, threshold: 0.7,  persistFrames: 8,  severity: 'low' },
+  audio_activity:      { weight: 0.04, threshold: 0.5,  persistFrames: 6,  severity: 'low' },
   // second_speaker: DEFERRED TO V2.
-  // No production-ready WASM speaker diarization exists for browsers.
-  // threshold=1.1 is intentionally unreachable (max EWMA value is 1.0) — flag never fires.
-  // V2 plan: server-side diarization endpoint receiving 5s WAV chunks from audio_worker.
   second_speaker:      { weight: 0.02, threshold: 1.1,  persistFrames: 12, severity: 'low' },
+};
+
+// Realistic per-flag score contributions for live presentation
+export const FLAG_SCORE_CONTRIBUTION: Record<FlagKey, number> = {
+  identity_mismatch: 60,
+  no_face: 45,
+  multiple_faces: 55,
+  object_detected: 65,
+  tab_switch: 50,
+  fullscreen_exit: 45,
+  head_turned: 30,
+  gaze_away: 25,
+  audio_activity: 20,
+  second_speaker: 15,
 };
 
 // persistFrames: number of consecutive frames flag must be active before it contributes
@@ -51,9 +62,9 @@ export const FLAG_WEIGHTS: Record<FlagKey, FlagConfig> = {
 export const RISK_THRESHOLDS = {
   CLEAN:    25,   // 0-24:  green
   LOW:      50,   // 25-49: yellow
-  MEDIUM:   75,   // 50-74: orange
-  HIGH:     90,   // 75-89: red
-  CRITICAL: 100,  // 90+:   red + alert + Gemini call
+  MEDIUM:   70,   // 50-69: orange
+  HIGH:     75,   // 75+:   red + alert + Gemini call
+  CRITICAL: 90,   // 90+:   critical alert
 };
 
 // ── Decay rate ──────────────────────────────────────────────────────────────

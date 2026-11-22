@@ -5,6 +5,7 @@
 
 import { useRef, useCallback } from 'react';
 import apiClient from '@/lib/api';
+import { supabase } from '@/lib/supabase';
 
 export interface MalpracticeEvent {
   sessionId: string;
@@ -134,22 +135,20 @@ export function useEventReporter(sessionId: string) {
     });
 
     const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || '';
-    const sent = navigator.sendBeacon(
-      `${backendUrl}/api/events/batch`,
-      new Blob([payload], { type: 'application/json' }),
-    );
-
-    if (!sent) {
-      // sendBeacon queue full (extremely rare) — synchronous XHR fallback
-      try {
-        const xhr = new XMLHttpRequest();
-        xhr.open('POST', `${backendUrl}/api/events/batch`, false); // synchronous
-        xhr.setRequestHeader('Content-Type', 'application/json');
-        xhr.send(payload);
-      } catch {
-        console.warn('[useEventReporter] Final flush XHR fallback failed');
-      }
-    }
+    supabase.auth.getSession().then(({ data }: any) => {
+      const token = data?.session?.access_token || '';
+      fetch(`${backendUrl}/api/events/batch`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: payload,
+        keepalive: true,
+      }).catch((err) => {
+        console.warn('[useEventReporter] Final flush keepalive fetch failed:', err);
+      });
+    });
   }, [flushEvents]);
 
   return { addEvent, flushEvents, sendHighEvent, uploadClip, startAutoFlush, stopAutoFlush };

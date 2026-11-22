@@ -5,7 +5,7 @@
 
 import { useRef, useCallback, useEffect, useState } from 'react';
 
-interface FaceAnalysisResult {
+export interface FaceAnalysisResult {
   faceCount: number;
   headPose: {
     yaw: number;
@@ -20,6 +20,10 @@ interface FaceAnalysisResult {
   earScore: number;
   identityScore: number | null;
   landmarkCount: number;
+  expression: 'neutral' | 'stressed' | 'talking' | 'smiling';
+  lipMovement: boolean;
+  marScore: number;
+  faceDescriptor?: number[];
 }
 
 type FaceWorkerOutbound =
@@ -90,9 +94,13 @@ export function useFaceWorker() {
     }
   }, [workerFailed]);
 
-  const send = useCallback((message: any) => {
+  const send = useCallback((message: any, transfer?: Transferable[]) => {
     if (workerRef.current) {
-      workerRef.current.postMessage(message);
+      if (transfer && transfer.length > 0) {
+        workerRef.current.postMessage(message, transfer);
+      } else {
+        workerRef.current.postMessage(message);
+      }
     }
   }, []);
 
@@ -115,5 +123,12 @@ export function useFaceWorker() {
     };
   }, [terminate]);
 
-  return { init, send, onMessage, terminate, isReady, error, workerFailed };
+  const setEnrollment = useCallback((descriptor: Float32Array | number[]) => {
+    if (workerRef.current) {
+      const arr = descriptor instanceof Float32Array ? descriptor : new Float32Array(descriptor);
+      workerRef.current.postMessage({ type: 'SET_ENROLLMENT', descriptor: arr });
+    }
+  }, []);
+
+  return { init, send, onMessage, terminate, isReady, error, workerFailed, setEnrollment };
 }

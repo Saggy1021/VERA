@@ -17,7 +17,12 @@ export function useProctorSocket(sessionId: string | null) {
     if (!sessionId) return;
     if (socketRef.current?.connected) return;
 
-    const { data: { session } } = await supabase.auth.getSession();
+    let { data: { session } } = await supabase.auth.getSession();
+    if (!session) {
+      // Token may be expired — attempt a silent refresh once
+      const { data: refreshed } = await supabase.auth.refreshSession();
+      session = refreshed.session;
+    }
     if (!session) return;
 
     const socketUrl = process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:8000';
@@ -96,8 +101,12 @@ export function useProctorSocket(sessionId: string | null) {
     });
 
     socket.on('candidate_status', (data: any) => {
-      const { candidateId, status, riskLevel } = data;
-      updateCandidate(candidateId, { status, riskLevel });
+      const { candidateId, status, riskLevel, thumbnailUrl } = data;
+      updateCandidate(candidateId, {
+        status,
+        ...(riskLevel !== undefined ? { riskLevel } : {}),
+        ...(thumbnailUrl ? { thumbnailUrl } : {}),
+      });
     });
 
     socket.on('session_alert', (data: any) => {
@@ -119,12 +128,14 @@ export function useProctorSocket(sessionId: string | null) {
     }
   }, []);
 
-  const sendWarning = useCallback((candidateId: string, message: string) => {
+  const sendWarning = useCallback(async (candidateId: string, message: string) => {
     if (socketRef.current && sessionId) {
+      const { data: { session } } = await supabase.auth.getSession();
       socketRef.current.emit('send_warning', {
         sessionId,
         candidateId,
         message,
+        token: session?.access_token,
       });
     }
   }, [sessionId]);

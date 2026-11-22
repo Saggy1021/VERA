@@ -11,6 +11,13 @@ class Settings(BaseSettings):
     supabase_anon_key: str = ""
     supabase_service_role_key: str = ""
     supabase_jwt_secret: str = ""
+    jwt_secret: str = ""
+    jwt_algorithm: str = "ES256"
+
+    def __init__(self, **values):
+        super().__init__(**values)
+        if not self.supabase_jwt_secret and self.jwt_secret:
+            self.supabase_jwt_secret = self.jwt_secret
 
     # ── Backend ───────────────────────────────────
     backend_secret_key: str = ""
@@ -40,6 +47,7 @@ class Settings(BaseSettings):
         env_file = ".env"
         env_file_encoding = "utf-8"
         case_sensitive = False
+        extra = "ignore"
 
 
 settings = Settings()

@@ -103,6 +103,18 @@ async def update_session_status(
         user_agent=request.headers.get("user-agent"),
     )
 
+    # Real-time broadcast: notify candidate and proctor rooms immediately via Socket.IO
+    try:
+        from main import sio
+        await sio.emit(
+            "session_ended" if body.status.value in ("completed", "cancelled") else "session_status_changed",
+            {"sessionId": str(session_id), "status": body.status.value},
+            room=f"session:{session_id}",
+        )
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"[sessions] Failed to emit session status via Socket.IO: {e}")
+
     # B10: Auto-generate draft reports for all candidates when session completes.
     # Runs synchronously in the same request — report generation is a fast DB
     # aggregation query (not an ML call). Idempotent: skips if already exists.

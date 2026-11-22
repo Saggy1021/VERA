@@ -1,11 +1,10 @@
 # FILE: backend/services/gemini_service.py
-# Gemini Flash API: analyze screenshot
+# Gemini AI screenshot analysis for HIGH severity proctoring events
 
 import httpx
 import os
-
-GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent'
-GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
+import json
+from config import settings
 
 PROMPT_TEMPLATE = """
 You are a professional online exam proctor AI. Analyze this screenshot from a candidate's exam session.
@@ -23,16 +22,19 @@ Respond with a JSON object ONLY, no prose:
 async def analyze_screenshot(
     screenshot_b64: str,
     flag_types: list[str],
-    client: httpx.AsyncClient
+    client: httpx.AsyncClient | None = None
 ) -> dict:
     """
-    Called ONLY for HIGH severity events.
-    Receives the screenshot and a structured prompt.
+    Called asynchronously for HIGH severity events.
     Returns a verdict that is stored in the event record.
+    Failure must NEVER crash the event handler.
     """
-    if not GEMINI_API_KEY:
+    api_key = settings.gemini_api_key or os.environ.get('GEMINI_API_KEY', '')
+    if not api_key:
         return {'verdict': None, 'status': 'skipped', 'error': 'No API key configured'}
 
+    # Use fast lightweight endpoint
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
     payload = {
         'contents': [{
             'parts': [
@@ -42,16 +44,19 @@ async def analyze_screenshot(
         }],
         'generationConfig': {'temperature': 0.1, 'maxOutputTokens': 200}
     }
+
     try:
-        resp = await client.post(
-            GEMINI_URL,
-            params={'key': GEMINI_API_KEY},
-            json=payload,
-            timeout=8.0
-        )
-        text = resp.json()['candidates'][0]['content']['parts'][0]['text']
-        return {'verdict': text, 'status': 'ok'}
+        if client:
+            resp = await client.post(url, json=payload, timeout=5.0)
+        else:
+            async with httpx.AsyncClient() as c:
+                resp = await c.post(url, json=payload, timeout=5.0)
+
+        if resp.status_code == 200:
+            data = resp.json()
+            text = data['candidates'][0]['content']['parts'][0]['text']
+            return {'verdict': text, 'status': 'ok'}
+        else:
+            return {'verdict': None, 'status': 'error', 'error': f"HTTP {resp.status_code}"}
     except Exception as e:
         return {'verdict': None, 'status': 'error', 'error': str(e)}
-        # IMPORTANT: Gemini failure must NEVER crash the event handler.
-        # The event is still saved without a Gemini verdict.

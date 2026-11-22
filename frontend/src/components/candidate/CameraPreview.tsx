@@ -29,6 +29,11 @@ export const CameraPreview = forwardRef<CameraPreviewRef, CameraPreviewProps>(
       get stream() { return streamRef.current; },
     }));
 
+    const onStreamReadyRef = useRef(onStreamReady);
+    useEffect(() => {
+      onStreamReadyRef.current = onStreamReady;
+    }, [onStreamReady]);
+
     useEffect(() => {
       let mounted = true;
 
@@ -51,7 +56,7 @@ export const CameraPreview = forwardRef<CameraPreviewRef, CameraPreviewProps>(
           if (videoRef.current) {
             videoRef.current.srcObject = stream;
           }
-          onStreamReady?.(stream);
+          onStreamReadyRef.current?.(stream);
         } catch (err) {
           console.error('[CameraPreview] Failed to access camera:', err);
         }
@@ -66,7 +71,7 @@ export const CameraPreview = forwardRef<CameraPreviewRef, CameraPreviewProps>(
           streamRef.current = null;
         }
       };
-    }, [onStreamReady]);
+    }, []);
 
     return (
       <div className="relative rounded-xl overflow-hidden bg-gray-900 border border-gray-800">

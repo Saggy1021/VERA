@@ -4,6 +4,7 @@
 import {
   EWMA_ALPHA,
   FLAG_WEIGHTS,
+  FLAG_SCORE_CONTRIBUTION,
   SCORE_DECAY_PER_FRAME,
   type FlagKey,
   type RawFlags,
@@ -36,7 +37,7 @@ export function updateRiskEWMA(
     // clearance, but a single dropped frame only costs 2 frames of progress.
     // This tolerates noise spikes while still draining counters quickly enough
     // that genuine clearance is reflected within ~1 second.
-    if (raw > config.threshold) {
+    if (raw >= config.threshold) {
       newPersistCounters[flagKey] = (state.persistCounters[flagKey] ?? 0) + 1;
     } else {
       newPersistCounters[flagKey] = Math.max(
@@ -58,14 +59,15 @@ export function computeCompositeScore(state: RiskState): number {
     const smoothedVal = state.smoothed[flagKey] ?? 0;
     const persistOk = (state.persistCounters[flagKey] ?? 0)
                       >= config.persistFrames;
-    if (persistOk && smoothedVal > config.threshold) {
-      score += smoothedVal * config.weight * 100;
+    if (persistOk && smoothedVal >= config.threshold) {
+      const contribution = FLAG_SCORE_CONTRIBUTION[flagKey] ?? (config.weight * 100);
+      score += smoothedVal * contribution;
     }
   }
 
-  // Decay if score was high but flags cleared
-  const allClear = Object.values(state.persistCounters).every(c => c === 0);
-  if (allClear) {
+  // Smooth decay: if no flags actively breach persist counters, decay smoothly
+  // from lastScore by SCORE_DECAY_PER_FRAME rather than snapping abruptly to 0
+  if (score === 0 && (state.lastScore ?? 0) > 0) {
     score = Math.max(0, (state.lastScore ?? 0) - SCORE_DECAY_PER_FRAME);
   }
 

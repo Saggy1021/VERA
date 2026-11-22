@@ -16,6 +16,7 @@ export function AudioMeter({ stream, isActive = false }: AudioMeterProps) {
 
   useEffect(() => {
     if (!stream || !isActive) return;
+    if (stream.getAudioTracks().length === 0) return;
 
     const audioCtx = new AudioContext();
     const source = audioCtx.createMediaStreamSource(stream);

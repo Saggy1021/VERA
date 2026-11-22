@@ -45,6 +45,9 @@ export function useObjectWorker() {
         } else if (msg.type === 'ERROR') {
           setError(msg.message);
           console.error('[useObjectWorker] Error:', msg.message);
+          // Don't leave isReady stuck at false on a non-fatal model error.
+          // The worker stays alive; ANALYZE_FRAME returns empty detections.
+          // Only mark ready=false if we also terminate the worker.
         }
         if (callbackRef.current) {
           callbackRef.current(msg);
@@ -73,9 +76,13 @@ export function useObjectWorker() {
     }
   }, [workerFailed]);
 
-  const send = useCallback((message: any) => {
+  const send = useCallback((message: any, transfer?: Transferable[]) => {
     if (workerRef.current) {
-      workerRef.current.postMessage(message);
+      if (transfer && transfer.length > 0) {
+        workerRef.current.postMessage(message, transfer);
+      } else {
+        workerRef.current.postMessage(message);
+      }
     }
   }, []);
 

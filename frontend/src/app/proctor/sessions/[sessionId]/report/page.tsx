@@ -11,7 +11,6 @@ import { ErrorBoundary } from '@/components/shared/ErrorBoundary';
 import { getRiskColor } from '@/lib/utils';
 import { FileText, Send, EyeOff, Download, CheckCircle2, AlertTriangle } from 'lucide-react';
 import toast from 'react-hot-toast';
-import jsPDF from 'jspdf';
 
 interface CandidateReport {
   candidate_id: string;
@@ -53,25 +52,26 @@ export default function ProctorReportPage() {
         const candidatesResp = await apiClient.get(`/api/sessions/${sessionId}/candidates`);
         const candidates = candidatesResp.data;
 
-        // Fetch report for each candidate
-        const reportsList: CandidateReport[] = [];
-        for (const c of candidates) {
-          let report = null;
-          try {
-            const reportResp = await apiClient.get(
-              `/api/reports/${sessionId}/${c.candidate_id}`
-            );
-            report = reportResp.data;
-          } catch {
-            // No report yet — will show "Generate" button
-          }
-          reportsList.push({
-            candidate_id: c.candidate_id,
-            candidate_name: c.full_name || c.email,
-            candidate_email: c.email,
-            report,
-          });
-        }
+        // Parallel fetch for all candidate reports (eliminates sequential N+1 loop)
+        const reportsList: CandidateReport[] = await Promise.all(
+          candidates.map(async (c: any) => {
+            let report = null;
+            try {
+              const reportResp = await apiClient.get(
+                `/api/reports/${sessionId}/${c.candidate_id}`
+              );
+              report = reportResp.data;
+            } catch {
+              // No report yet
+            }
+            return {
+              candidate_id: c.candidate_id,
+              candidate_name: c.full_name || c.name || c.email,
+              candidate_email: c.email,
+              report,
+            };
+          })
+        );
         setReports(reportsList);
       } catch (err) {
         console.error('Failed to fetch reports:', err);
@@ -136,9 +136,11 @@ export default function ProctorReportPage() {
     }
   }, [sessionId]);
 
-  const handleDownloadPDF = useCallback((cr: CandidateReport) => {
+  const handleDownloadPDF = useCallback(async (cr: CandidateReport) => {
     if (!cr.report) return;
 
+    // Dynamically lazy-load heavy jsPDF only on user click
+    const { default: jsPDF } = await import('jspdf');
     const doc = new jsPDF();
     const r = cr.report;
 

@@ -28,21 +28,24 @@ export default function CandidatesPage() {
         const sessionsResp = await apiClient.get('/api/sessions');
         const allCandidates: CandidateEntry[] = [];
 
-        for (const session of sessionsResp.data) {
-          try {
-            const candidatesResp = await apiClient.get(`/api/sessions/${session.id}/candidates`);
-            for (const c of candidatesResp.data) {
-              allCandidates.push({
+        // Parallel fetch for all session candidates (eliminates N+1 loop)
+        const sessionResults = await Promise.all(
+          sessionsResp.data.map(async (session: any) => {
+            try {
+              const resp = await apiClient.get(`/api/sessions/${session.id}/candidates`);
+              return resp.data.map((c: any) => ({
                 candidate_id: c.candidate_id,
-                name: c.name || c.email,
+                name: c.full_name || c.email || 'Candidate',
                 email: c.email,
                 session_title: session.title,
-                status: c.status || 'invited',
-              });
+                status: c.enrolled_at ? 'enrolled' : 'invited',
+              }));
+            } catch {
+              return [];
             }
-          } catch { /* skip sessions with no candidates */ }
-        }
-        setCandidates(allCandidates);
+          })
+        );
+        setCandidates(sessionResults.flat());
       } catch (err) {
         console.error('Failed to fetch candidates:', err);
       } finally {

@@ -17,14 +17,92 @@ def _session_room(session_id: str) -> str:
     return f"session:{session_id}"
 
 
+# Track active candidate socket connections: sid -> (session_id, candidate_id)
+_candidate_connections: dict = {}
+# Track active candidate live state: (session_id, candidate_id) -> state dict
+_candidate_live_state: dict = {}
+
+
 def register_socketio_events(sio: socketio.AsyncServer) -> None:
     """Register all Socket.IO event handlers."""
 
     @sio.event
     async def connect(sid, environ, auth):
         """Handle new Socket.IO connection."""
-        # Auth is optional at connect time — validated on join_proctor_room
+        # Auth is optional at connect time — validated on join_proctor_room or candidate_heartbeat
         log.info("[Socket.IO] Client connected: %s", sid)
+
+    @sio.event
+    async def candidate_heartbeat(sid, data):
+        """
+        Candidate periodic heartbeat (every 1.5s).
+        Carries compressed video thumbnail and real-time risk score.
+        Authenticates candidate JWT and broadcasts candidate_status to session room.
+        """
+        session_id = data.get("sessionId")
+        token = data.get("token")
+        risk_level = data.get("riskLevel", 0)
+        thumbnail = data.get("thumbnail")
+
+        if not session_id or not token:
+            return
+
+        try:
+            payload = validate_token(token)
+            candidate_id = payload.user_id
+        except Exception as e:
+            log.warning("[Socket.IO] Candidate heartbeat auth failed: %s", e)
+            return
+
+        room = _session_room(session_id)
+        _candidate_connections[sid] = (session_id, candidate_id)
+        _candidate_live_state[(session_id, candidate_id)] = {
+            "status": "online",
+            "riskLevel": risk_level,
+            "thumbnailUrl": thumbnail,
+        }
+
+        # Enter session room so candidate receives proctor warnings
+        await sio.enter_room(sid, room)
+
+        # Broadcast online status, risk level, and thumbnail to proctor
+        await sio.emit(
+            "candidate_status",
+            {
+                "candidateId": candidate_id,
+                "status": "online",
+                "riskLevel": risk_level,
+                "thumbnailUrl": thumbnail,
+            },
+            room=room,
+        )
+
+    @sio.event
+    async def candidate_join(sid, data):
+        """Candidate initial room subscription."""
+        session_id = data.get("sessionId")
+        token = data.get("token")
+        if not session_id or not token:
+            return
+        try:
+            payload = validate_token(token)
+            candidate_id = payload.user_id
+            room = _session_room(session_id)
+            _candidate_connections[sid] = (session_id, candidate_id)
+            _candidate_live_state[(session_id, candidate_id)] = {
+                "status": "online",
+                "riskLevel": 0,
+                "thumbnailUrl": None,
+            }
+            await sio.enter_room(sid, room)
+            await sio.emit(
+                "candidate_status",
+                {"candidateId": candidate_id, "status": "online", "riskLevel": 0},
+                room=room,
+            )
+            log.info("[Socket.IO] Candidate %s joined session room %s", candidate_id, room)
+        except Exception as e:
+            log.warning("[Socket.IO] Candidate join auth failed: %s", e)
 
     @sio.event
     async def join_proctor_room(sid, data):
@@ -64,6 +142,15 @@ def register_socketio_events(sio: socketio.AsyncServer) -> None:
         )
         log.info("[Socket.IO] Proctor %s joined room %s", payload.user_id, room)
 
+        # Replay immediate status for any candidates already online in this session
+        for (s_id, c_id), state in list(_candidate_live_state.items()):
+            if s_id == session_id:
+                await sio.emit(
+                    "candidate_status",
+                    {"candidateId": c_id, **state},
+                    room=sid,
+                )
+
         # C1: Send missed HIGH/CRITICAL events from the last 30 minutes on reconnect.
         # This ensures a proctor who refreshes their browser doesn't miss critical alerts.
         try:
@@ -88,6 +175,20 @@ def register_socketio_events(sio: socketio.AsyncServer) -> None:
     @sio.event
     async def disconnect(sid):
         """Handle Socket.IO disconnection."""
+        if sid in _candidate_connections:
+            session_id, candidate_id = _candidate_connections.pop(sid)
+            _candidate_live_state.pop((session_id, candidate_id), None)
+            room = _session_room(session_id)
+            await sio.emit(
+                "candidate_status",
+                {
+                    "candidateId": candidate_id,
+                    "status": "offline",
+                },
+                room=room,
+            )
+            log.info("[Socket.IO] Candidate %s disconnected from %s", candidate_id, room)
+
         manager.leave_all_rooms(sid)
         log.info("[Socket.IO] Client disconnected: %s", sid)
 
@@ -96,14 +197,26 @@ def register_socketio_events(sio: socketio.AsyncServer) -> None:
         """
         Proctor sends a live pop-up warning to a specific candidate's screen.
         The warning is pushed to the session room and filtered client-side.
+        Authenticated: requires proctor JWT token or verified proctor session.
         """
         session_id = data.get("sessionId")
         candidate_id = data.get("candidateId")
         message = data.get("message", "")
+        token = data.get("token")
 
         if not session_id or not candidate_id or not message:
             await sio.emit("error", {"message": "Missing required fields"}, room=sid)
             return
+
+        if token:
+            try:
+                payload = validate_token(token)
+                if payload.role != "proctor":
+                    await sio.emit("error", {"message": "Proctor access required"}, room=sid)
+                    return
+            except Exception as e:
+                await sio.emit("error", {"message": f"Auth failed: {str(e)}"}, room=sid)
+                return
 
         # C1: Use namespaced room name
         room = _session_room(session_id)

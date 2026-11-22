@@ -20,7 +20,16 @@ async def build_report(session_id: str, candidate_id: str) -> Optional[dict]:
     ]
 
     if not candidate_events:
-        return None
+        # Generate clean 100/100 integrity report for flawless session
+        report = await queries.create_report(
+            session_id=session_id,
+            candidate_id=candidate_id,
+            overall_score=100,
+            summary="Session completed with zero malpractice events detected. Perfect integrity score: 100/100.",
+            event_count={"low": 0, "medium": 0, "high": 0, "critical": 0},
+            timeline=[],
+        )
+        return report if report else None
 
     # Count events by severity
     event_count = {"low": 0, "medium": 0, "high": 0, "critical": 0}

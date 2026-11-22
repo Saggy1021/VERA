@@ -41,6 +41,9 @@ npm-debug.log*
 # Supabase local
 supabase/.temp/
 
+# Local ML Models
+frontend/public/models/
+
 # Python
 *.egg-info/
 .eggs/
