@@ -11,7 +11,7 @@ import { supabase } from '@/lib/supabase';
 export function useProctorSocket(sessionId: string | null) {
   const socketRef = useRef<Socket | null>(null);
   const [isConnected, setIsConnected] = useState(false);
-  const { updateCandidate, addAlert } = useProctorStore();
+  const { updateCandidate, addAlert, addCandidateTranscript } = useProctorStore();
 
   const connect = useCallback(async () => {
     if (!sessionId) return;
@@ -109,6 +109,18 @@ export function useProctorSocket(sessionId: string | null) {
       });
     });
 
+    socket.on('candidate_transcript', (data: any) => {
+      const { candidateId, text, flagged, timestamp } = data;
+      if (candidateId && text) {
+        addCandidateTranscript(candidateId, {
+          id: `tx_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+          text,
+          flagged: !!flagged,
+          timestamp: timestamp || new Date().toISOString(),
+        });
+      }
+    });
+
     socket.on('session_alert', (data: any) => {
       console.log('[ProctorSocket] Session alert:', data);
     });
@@ -118,7 +130,7 @@ export function useProctorSocket(sessionId: string | null) {
     });
 
     socketRef.current = socket;
-  }, [sessionId, updateCandidate, addAlert]);
+  }, [sessionId, updateCandidate, addAlert, addCandidateTranscript]);
 
   const disconnect = useCallback(() => {
     if (socketRef.current) {
@@ -128,13 +140,14 @@ export function useProctorSocket(sessionId: string | null) {
     }
   }, []);
 
-  const sendWarning = useCallback(async (candidateId: string, message: string) => {
+  const sendWarning = useCallback(async (candidateId: string, message: string, speak: boolean = true) => {
     if (socketRef.current && sessionId) {
       const { data: { session } } = await supabase.auth.getSession();
       socketRef.current.emit('send_warning', {
         sessionId,
         candidateId,
         message,
+        speak,
         token: session?.access_token,
       });
     }

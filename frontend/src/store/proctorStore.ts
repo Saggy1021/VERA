@@ -3,6 +3,13 @@
 
 import { create } from 'zustand';
 
+export interface CandidateTranscriptItem {
+  id: string;
+  text: string;
+  flagged: boolean;
+  timestamp: string;
+}
+
 export interface CandidateLiveData {
   candidateId: string;
   name: string;
@@ -12,6 +19,7 @@ export interface CandidateLiveData {
   lastEvent: string | null;
   lastEventTime: string | null;
   thumbnailUrl: string | null;
+  transcripts?: CandidateTranscriptItem[];
 }
 
 export interface AlertEvent {
@@ -35,6 +43,7 @@ export interface ProctorState {
   setSessionId: (id: string) => void;
   setCandidates: (candidates: Record<string, CandidateLiveData>) => void;
   updateCandidate: (candidateId: string, data: Partial<CandidateLiveData>) => void;
+  addCandidateTranscript: (candidateId: string, item: CandidateTranscriptItem) => void;
   setAlerts: (alerts: AlertEvent[]) => void;
   addAlert: (alert: AlertEvent) => void;
   setSelectedCandidate: (candidateId: string | null) => void;
@@ -62,6 +71,23 @@ export const useProctorStore = create<ProctorState>((set) => ({
         } as CandidateLiveData,
       },
     })),
+
+  addCandidateTranscript: (candidateId, item) =>
+    set((state) => {
+      const candidate = state.candidates[candidateId];
+      if (!candidate) return state;
+      const currentList = candidate.transcripts || [];
+      const updatedList = [...currentList.slice(-19), item];
+      return {
+        candidates: {
+          ...state.candidates,
+          [candidateId]: {
+            ...candidate,
+            transcripts: updatedList,
+          },
+        },
+      };
+    }),
 
   setAlerts: (alerts) => set({ alerts }),
 

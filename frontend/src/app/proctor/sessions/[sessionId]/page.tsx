@@ -234,10 +234,16 @@ export default function ProctorSessionPage() {
   // Send warning to candidate
   const handleSendWarning = useCallback(() => {
     if (!selectedCandidateId || !warningText.trim()) return;
-    sendWarning(selectedCandidateId, warningText);
-    toast.success('Warning sent to candidate');
+    sendWarning(selectedCandidateId, warningText.trim(), true);
+    toast.success('Voice warning sent to candidate');
     setWarningText('');
   }, [selectedCandidateId, warningText, sendWarning]);
+
+  // One-click Voice Intercom preset action
+  const handleSendVoicePreset = useCallback((candId: string, msg: string) => {
+    sendWarning(candId, msg, true);
+    toast.success(`Voice warning broadcast: "${msg}"`);
+  }, [sendWarning]);
 
   if (loading) {
     return (
@@ -348,7 +354,7 @@ export default function ProctorSessionPage() {
                   </button>
                 </form>
               </div>
-              <LiveGrid />
+              <LiveGrid onSendVoiceWarning={handleSendVoicePreset} />
             </div>
           </ErrorBoundary>
 

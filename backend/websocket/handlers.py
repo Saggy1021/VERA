@@ -5,6 +5,7 @@
 #     - Make server-side grep/debug output immediately readable
 
 import socketio
+from datetime import datetime, timezone
 from websocket.manager import manager
 from auth.jwt_validator import validate_token
 from db import queries
@@ -197,12 +198,14 @@ def register_socketio_events(sio: socketio.AsyncServer) -> None:
         """
         Proctor sends a live pop-up warning to a specific candidate's screen.
         The warning is pushed to the session room and filtered client-side.
+        Supports One-Way Voice Intercom (speak=True) through SpeechSynthesis.
         Authenticated: requires proctor JWT token or verified proctor session.
         """
         session_id = data.get("sessionId")
         candidate_id = data.get("candidateId")
         message = data.get("message", "")
         token = data.get("token")
+        speak = data.get("speak", True)
 
         if not session_id or not candidate_id or not message:
             await sio.emit("error", {"message": "Missing required fields"}, room=sid)
@@ -225,7 +228,35 @@ def register_socketio_events(sio: socketio.AsyncServer) -> None:
             {
                 "candidateId": candidate_id,
                 "message": message,
+                "speak": speak if isinstance(speak, bool) else True,
                 "timestamp": None,  # Client will use local time
+            },
+            room=room,
+        )
+
+    @sio.event
+    async def candidate_transcript(sid, data):
+        """
+        Candidate live speech-to-text transcript event.
+        Broadcasts candidate_transcript to session room for real-time proctor monitoring.
+        """
+        session_id = data.get("sessionId")
+        candidate_id = data.get("candidateId")
+        text = data.get("text", "")
+        flagged = data.get("flagged", False)
+
+        if not session_id or not text:
+            return
+
+        room = _session_room(session_id)
+        await sio.emit(
+            "candidate_transcript",
+            {
+                "sessionId": session_id,
+                "candidateId": candidate_id,
+                "text": text,
+                "flagged": bool(flagged),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             },
             room=room,
         )

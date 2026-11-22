@@ -13,6 +13,7 @@ import { useObjectWorker } from './useObjectWorker';
 import { useAudioWorker } from './useAudioWorker';
 import { useFocusWorker } from './useFocusWorker';
 import { useEventReporter } from './useEventReporter';
+import { useLiveTranscript } from './useLiveTranscript';
 import { useSessionStore } from '@/store/sessionStore';
 import { updateRiskEWMA, computeCompositeScore } from '@/lib/scoring';
 import {
@@ -283,6 +284,52 @@ function encodeWAV(samples: Float32Array, sampleRate = 16000): Blob {
       screenshot,
     );
   }, [captureScreenshot, eventReporter, extractClipBlob, sessionId]);
+
+  // ── Native Web Speech API Live Transcription & Keyword Scanner ──
+  const liveTranscript = useLiveTranscript({
+    onSettledPhrase: (text, flaggedKeyword) => {
+      setLiveSpeechActive(true);
+      setTimeout(() => setLiveSpeechActive(false), 2500);
+
+      // Emit settled speech transcript to backend socket
+      if (socketRef.current?.connected) {
+        socketRef.current.emit('candidate_transcript', {
+          sessionId,
+          candidateId: candidateIdRef.current,
+          text,
+          flagged: !!flaggedKeyword,
+        });
+      }
+
+      // If suspicious keyword matched, add +25 risk and trigger high alert immediately
+      if (flaggedKeyword) {
+        const newRisk = Math.min(100, (riskRef.current.lastScore || 0) + 25);
+        riskRef.current.lastScore = newRisk;
+        setRiskScore(newRisk);
+
+        triggerHighAlert('audio_activity', `Flagged phrase detected: "${flaggedKeyword}"`);
+        eventReporter.addEvent({
+          event_type: 'audio_activity',
+          severity: 'high',
+          risk_score: newRisk,
+          description: `Flagged keyword: "${flaggedKeyword}" in speech: "${text}"`,
+          metadata: { keyword: flaggedKeyword, transcript: text },
+        });
+      }
+
+      // Update Live AI HUD ticker
+      setLatestTranscript(flaggedKeyword ? `⚠️ [FLAGGED] ${text}` : text);
+    },
+    onInterimPhrase: (interim) => {
+      setLiveSpeechActive(true);
+      setLatestTranscript(interim);
+    },
+  });
+
+  const liveTranscriptRef = useRef(liveTranscript);
+  useEffect(() => {
+    liveTranscriptRef.current = liveTranscript;
+  });
 
   // ── Compute face flags from result ─────────────
   const computeFaceFlags = useCallback((result: any): Partial<RawFlags> => {
@@ -608,6 +655,7 @@ function encodeWAV(samples: Float32Array, sampleRate = 16000): Blob {
     objectWorker.init();
     audioWorker.init(); // do not await
     focusMonitor.init(sessionId);
+    liveTranscriptRef.current?.startListening();
 
     // Load enrollment descriptor if available
     try {
@@ -658,6 +706,19 @@ function encodeWAV(samples: Float32Array, sampleRate = 16000): Blob {
       socket.on('proctor_warning', (data: any) => {
         if (data.candidateId === userId) {
           useSessionStore.getState().addWarning(data.message);
+
+          // One-Way Proctor Voice Intercom via native SpeechSynthesis
+          if (data.speak !== false && typeof window !== 'undefined' && 'speechSynthesis' in window) {
+            try {
+              window.speechSynthesis.cancel();
+              const utterance = new SpeechSynthesisUtterance(data.message);
+              utterance.rate = 1.0;
+              utterance.pitch = 1.0;
+              window.speechSynthesis.speak(utterance);
+            } catch (err) {
+              console.warn('[useSession] Speech synthesis warning voice error:', err);
+            }
+          }
         }
       });
 
@@ -758,6 +819,7 @@ function encodeWAV(samples: Float32Array, sampleRate = 16000): Blob {
     audioWorkerRef.current?.terminate();
     focusMonitorRef.current?.terminate();
     eventReporterRef.current?.stopAutoFlush();
+    liveTranscriptRef.current?.stopListening();
 
     speechSamplesBufferRef.current = [];
     speechTotalSamplesRef.current = 0;

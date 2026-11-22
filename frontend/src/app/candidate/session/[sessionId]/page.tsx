@@ -544,8 +544,14 @@ export default function LiveSessionPage() {
 
             {/* Live Transcript ticker if available */}
             {session.latestTranscript && (
-              <div className="p-1.5 bg-gray-800/80 rounded border border-gray-700/60 text-[11px] text-gray-300 italic truncate">
-                "{session.latestTranscript}"
+              <div
+                className={`p-1.5 rounded border text-[11px] font-mono leading-tight break-words transition-colors ${
+                  session.latestTranscript.includes('[FLAGGED]')
+                    ? 'bg-amber-950/50 border-amber-500/60 text-amber-300 font-semibold animate-pulse'
+                    : 'bg-gray-800/80 border-gray-700/60 text-gray-300 italic'
+                }`}
+              >
+                &ldquo;{session.latestTranscript}&rdquo;
               </div>
             )}
           </div>
