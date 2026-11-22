@@ -1,7 +1,0 @@
-tensorflow==2.10.0
-opencv-python==4.8.1.78
-matplotlib==3.7.3
-imageio==2.31.5
-imageio-ffmpeg==0.4.9
-gdown==4.7.1
-streamlit==1.22.0

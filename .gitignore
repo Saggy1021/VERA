@@ -1,39 +1,46 @@
-# Python bytecode and caches
+# Dependencies
+node_modules/
+**/node_modules/
 __pycache__/
-**/__pycache__/
-*.py[cod]
-*$py.class
-
-# Virtual environments
+**/*.pyc
 .venv/
 venv/
-venv310/
-venv312/
 
-# Notebook checkpoints
-.ipynb_checkpoints/
+# Environment
+.env
+.env.local
+.env.*.local
+*.env
 
-# OS / editor junk
+# Build outputs
+.next/
+**/.next/
+out/
+dist/
+build/
+*.tsbuildinfo
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
 .DS_Store
 Thumbs.db
-.vscode/
+desktop.ini
 
-# Logs and temporary files
+# Docker
+docker-compose.override.yml
+
+# Logs
 *.log
-*.tmp
-*.temp
+npm-debug.log*
 
-# Local generated demo outputs
-animation.gif
-test_video.mp4
+# Supabase local
+supabase/.temp/
 
-# Local installers / archives / backups
-*.zip
-*.exe
-
-# Large local datasets and model artifacts (do not push by default)
-data/
-models/
-
-# Legacy demo app (exclude if production-only repo)
-legacy/
+# Python
+*.egg-info/
+.eggs/
