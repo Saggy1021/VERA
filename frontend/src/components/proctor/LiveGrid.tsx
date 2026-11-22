@@ -9,9 +9,10 @@ import { ErrorBoundary } from '@/components/shared/ErrorBoundary';
 
 interface LiveGridProps {
   onSendVoiceWarning?: (candidateId: string, message: string) => void;
+  onSendWarning?: (candidateId: string, message: string, speak?: boolean) => void;
 }
 
-export function LiveGrid({ onSendVoiceWarning }: LiveGridProps) {
+export function LiveGrid({ onSendVoiceWarning, onSendWarning }: LiveGridProps) {
   const { candidates, selectedCandidateId, setSelectedCandidate } = useProctorStore();
   const candidateList = Object.values(candidates);
 
@@ -32,6 +33,7 @@ export function LiveGrid({ onSendVoiceWarning }: LiveGridProps) {
             isSelected={selectedCandidateId === candidate.candidateId}
             onClick={() => setSelectedCandidate(candidate.candidateId)}
             onSendVoiceWarning={onSendVoiceWarning}
+            onSendWarning={onSendWarning}
           />
         </ErrorBoundary>
       ))}

@@ -12,6 +12,7 @@ export interface CandidateTranscriptItem {
 
 export interface CandidateLiveData {
   candidateId: string;
+  id?: string;
   name: string;
   email: string;
   status: 'online' | 'away' | 'offline';

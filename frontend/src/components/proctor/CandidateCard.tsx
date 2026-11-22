@@ -1,8 +1,9 @@
 // FILE: src/components/proctor/CandidateCard.tsx
-// Individual candidate status card with Live Scrolling Transcript & One-Way Voice Intercom
+// Individual candidate status card with Live Scrolling Transcript & Custom Voice Intercom
 
 'use client';
 
+import { useState } from 'react';
 import { type CandidateLiveData } from '@/store/proctorStore';
 import { getRiskColor, formatRelativeTime } from '@/lib/utils';
 import { User, Wifi, WifiOff, Volume2, Mic } from 'lucide-react';
@@ -12,6 +13,7 @@ interface CandidateCardProps {
   isSelected: boolean;
   onClick: () => void;
   onSendVoiceWarning?: (candidateId: string, message: string) => void;
+  onSendWarning?: (candidateId: string, message: string, speak?: boolean) => void;
 }
 
 export function CandidateCard({
@@ -19,8 +21,24 @@ export function CandidateCard({
   isSelected,
   onClick,
   onSendVoiceWarning,
+  onSendWarning,
 }: CandidateCardProps) {
+  const [customVoiceMessage, setCustomVoiceMessage] = useState('');
   const riskColor = getRiskColor(candidate.riskLevel);
+
+  const handleBroadcast = (e?: React.FormEvent | React.MouseEvent | React.KeyboardEvent) => {
+    if (e) e.stopPropagation();
+    const trimmed = customVoiceMessage.trim();
+    if (!trimmed) return;
+
+    const targetId = candidate.id || candidate.candidateId;
+    if (onSendWarning) {
+      onSendWarning(targetId, trimmed, true);
+    } else if (onSendVoiceWarning) {
+      onSendVoiceWarning(targetId, trimmed);
+    }
+    setCustomVoiceMessage('');
+  };
 
   return (
     <div
@@ -111,11 +129,13 @@ export function CandidateCard({
         </div>
       </div>
 
-      {/* One-Click Voice Intercom Preset Buttons */}
+      {/* One-Click Voice Intercom Preset Buttons & Custom Voice Input */}
       <div className="mt-3 pt-2 border-t border-gray-800">
         <span className="text-[10px] font-semibold text-purple-300 uppercase tracking-wider block mb-1.5 flex items-center gap-1">
           <Volume2 className="w-3 h-3 text-purple-400" /> Voice Intercom
         </span>
+
+        {/* Preset quick buttons */}
         <div className="flex flex-col gap-1">
           {[
             'Please face the screen',
@@ -127,7 +147,12 @@ export function CandidateCard({
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
-                onSendVoiceWarning?.(candidate.candidateId, preset);
+                const targetId = candidate.id || candidate.candidateId;
+                if (onSendWarning) {
+                  onSendWarning(targetId, preset, true);
+                } else if (onSendVoiceWarning) {
+                  onSendVoiceWarning(targetId, preset);
+                }
               }}
               className="flex items-center gap-1.5 px-2 py-1 bg-gray-800/90 hover:bg-purple-600/30
                          border border-gray-700/60 hover:border-purple-500/60 rounded text-[10px]
@@ -138,6 +163,39 @@ export function CandidateCard({
               <span className="truncate">{preset}</span>
             </button>
           ))}
+        </div>
+
+        {/* Interactive Custom Voice Intercom Input Bar */}
+        <div
+          className="mt-2 flex items-center gap-1.5"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <input
+            type="text"
+            value={customVoiceMessage}
+            onChange={(e) => setCustomVoiceMessage(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                handleBroadcast(e);
+              }
+            }}
+            placeholder="Type announcement to candidate..."
+            className="flex-1 min-w-0 bg-gray-950/90 border border-gray-700/80 rounded px-2 py-1
+                       text-[11px] text-white placeholder-gray-500 focus:outline-none focus:border-purple-500
+                       transition-colors"
+          />
+          <button
+            type="button"
+            disabled={!customVoiceMessage.trim()}
+            onClick={handleBroadcast}
+            className="flex items-center gap-1 px-2.5 py-1 bg-purple-600 hover:bg-purple-700
+                       disabled:bg-gray-800 disabled:text-gray-500 text-white rounded text-[10px]
+                       font-medium transition-colors flex-shrink-0 shadow-sm"
+            title="Broadcast Announcement"
+          >
+            <span>Broadcast 🔊</span>
+          </button>
         </div>
       </div>
     </div>

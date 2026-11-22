@@ -126,6 +126,7 @@ export default function ProctorSessionPage() {
       for (const c of resp.data) {
         map[c.candidate_id] = {
           candidateId: c.candidate_id,
+          id: c.candidate_id,
           name: c.full_name || c.name || c.email,
           email: c.email,
           status: 'offline',
@@ -245,6 +246,12 @@ export default function ProctorSessionPage() {
     toast.success(`Voice warning broadcast: "${msg}"`);
   }, [sendWarning]);
 
+  // Direct Voice Intercom broadcast (custom announcement)
+  const handleSendCustomVoiceWarning = useCallback((candId: string, msg: string, speak: boolean = true) => {
+    sendWarning(candId, msg, speak);
+    toast.success(`Voice announcement broadcast: "${msg}"`);
+  }, [sendWarning]);
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
@@ -354,7 +361,10 @@ export default function ProctorSessionPage() {
                   </button>
                 </form>
               </div>
-              <LiveGrid onSendVoiceWarning={handleSendVoicePreset} />
+              <LiveGrid
+                onSendVoiceWarning={handleSendVoicePreset}
+                onSendWarning={handleSendCustomVoiceWarning}
+              />
             </div>
           </ErrorBoundary>
 
