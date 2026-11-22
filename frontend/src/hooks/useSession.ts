@@ -702,6 +702,38 @@ function encodeWAV(samples: Float32Array, sampleRate = 16000): Blob {
         socket.emit('candidate_join', { sessionId, token });
       });
 
+      if (typeof window !== 'undefined') {
+        (window as any).__candidateSocket = socket;
+        (window as any).__candidateId = userId;
+        (window as any).__emitCandidateTranscript = (text: string, flagged: boolean = false) => {
+          socket.emit('candidate_transcript', {
+            sessionId,
+            candidateId: userId,
+            text,
+            flagged,
+          });
+          setLiveSpeechActive(true);
+          setLatestTranscript(flagged ? `⚠️ [FLAGGED] ${text}` : text);
+          if (flagged) {
+            const newRisk = Math.min(100, (riskRef.current.lastScore || 0) + 25);
+            riskRef.current.lastScore = newRisk;
+            setRiskScore(newRisk);
+            triggerHighAlert('audio_activity', `Flagged phrase detected: "${text}"`);
+          }
+        };
+      }
+
+      // Listen for transcript broadcasts
+      socket.on('candidate_transcript', (data: any) => {
+        if (data.text) {
+          setLiveSpeechActive(true);
+          setLatestTranscript(data.flagged ? `⚠️ [FLAGGED] ${data.text}` : data.text);
+          if (data.flagged && data.candidateId === userId) {
+            triggerHighAlert('audio_activity', `Flagged phrase detected: "${data.text}"`);
+          }
+        }
+      });
+
       // Listen for warnings intended for this candidate
       socket.on('proctor_warning', (data: any) => {
         if (data.candidateId === userId) {

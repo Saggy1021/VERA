@@ -242,6 +242,8 @@ def register_socketio_events(sio: socketio.AsyncServer) -> None:
         """
         session_id = data.get("sessionId")
         candidate_id = data.get("candidateId")
+        if not candidate_id and sid in _candidate_connections:
+            candidate_id = _candidate_connections[sid][1]
         text = data.get("text", "")
         flagged = data.get("flagged", False)
 

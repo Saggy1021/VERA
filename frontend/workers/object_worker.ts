@@ -32,10 +32,10 @@ let offscreenCanvas: OffscreenCanvas | null = null;
 let offscreenCtx: OffscreenCanvasRenderingContext2D | null = null;
 
 // ── COCO-SSD Init Timeout ─────────────────────────────────────
-// If model loading takes more than 20 s (CDN slow / network unavailable),
+// If model loading takes more than 3 s (CDN slow / network unavailable),
 // resolve as READY anyway with model=null so the HUD shows "Clear" instead
 // of being stuck on "Loading" forever.
-const MODEL_LOAD_TIMEOUT_MS = 20000;
+const MODEL_LOAD_TIMEOUT_MS = 3000;
 
 // ── Check if bbox touches frame edge ─────────────
 function isEdge(bbox: [number, number, number, number], width: number, height: number): boolean {
