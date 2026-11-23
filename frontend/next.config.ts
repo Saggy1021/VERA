@@ -1,10 +1,16 @@
 import type { NextConfig } from "next";
+import path from "path";
 
 const nextConfig: NextConfig = {
-  // Standalone output for Docker deployment
-  output: "standalone",
+  // Only output standalone when building for Docker (via BUILD_STANDALONE=true)
+  // so standard local execution (`next start` / `npm run start`) runs seamlessly.
+  ...(process.env.BUILD_STANDALONE === "true" ? { output: "standalone" } : {}),
 
-  turbopack: {},
+  outputFileTracingRoot: path.resolve(__dirname),
+
+  turbopack: {
+    root: path.resolve(__dirname),
+  },
 
   // Experimental package optimizations for faster builds & rendering
   experimental: {

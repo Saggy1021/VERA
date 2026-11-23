@@ -5,6 +5,7 @@
 #     - Make server-side grep/debug output immediately readable
 
 import socketio
+from uuid import UUID
 from datetime import datetime, timezone
 from websocket.manager import manager
 from auth.jwt_validator import validate_token
@@ -12,6 +13,19 @@ from db import queries
 import logging
 
 log = logging.getLogger(__name__)
+
+
+def _serialize_socket_payload(data):
+    """Recursively convert UUIDs and datetimes to JSON-serializable types for Socket.IO."""
+    if isinstance(data, dict):
+        return {k: _serialize_socket_payload(v) for k, v in data.items()}
+    elif isinstance(data, (list, tuple)):
+        return [_serialize_socket_payload(v) for v in data]
+    elif isinstance(data, UUID):
+        return str(data)
+    elif isinstance(data, datetime):
+        return data.isoformat()
+    return data
 
 # C1: Room name helper — always use this to construct room strings
 def _session_room(session_id: str) -> str:
@@ -162,7 +176,7 @@ def register_socketio_events(sio: socketio.AsyncServer) -> None:
             if missed:
                 await sio.emit(
                     "missed_events",
-                    {"events": [dict(e) for e in missed], "count": len(missed)},
+                    {"events": [_serialize_socket_payload(dict(e)) for e in missed], "count": len(missed)},
                     room=sid,
                 )
                 log.info(
